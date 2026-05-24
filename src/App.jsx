@@ -13,6 +13,7 @@ import {
   Trash2,
   Pencil,
   ChevronDown,
+  BarChart3,
 } from "lucide-react";
 
 const DB_NAME = "vehicle-records-db";
@@ -49,6 +50,15 @@ const defaultMaintenanceSchedule = [
     intervalMiles: 15000,
     intervalMonths: 12,
   },
+];
+
+const rangeOptions = [
+  { id: "1M", label: "1M" },
+  { id: "3M", label: "3M" },
+  { id: "6M", label: "6M" },
+  { id: "YTD", label: "YTD" },
+  { id: "1Y", label: "1Y" },
+  { id: "ALL", label: "All" },
 ];
 
 const starterState = {
@@ -161,7 +171,7 @@ function compressImageFile(file, maxWidth = 1600, quality = 0.78) {
 }
 
 function currency(value) {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) return "—";
   return Number(value).toLocaleString(undefined, {
     style: "currency",
     currency: "USD",
@@ -169,7 +179,7 @@ function currency(value) {
 }
 
 function number(value, digits = 0) {
-  if (value === undefined || value === null || value === "") return "—";
+  if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) return "—";
   return Number(value).toLocaleString(undefined, {
     maximumFractionDigits: digits,
   });
@@ -407,6 +417,138 @@ function getReminderSummary(vehicle) {
   return null;
 }
 
+function parseEntryDate(entry) {
+  return new Date(`${entry.date}T00:00:00`);
+}
+
+function getRangeStartDate(rangeId) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  if (rangeId === "ALL") return null;
+  if (rangeId === "YTD") return new Date(today.getFullYear(), 0, 1);
+  if (rangeId === "1M") {
+    start.setDate(start.getDate() - 30);
+    return start;
+  }
+  if (rangeId === "3M") {
+    start.setDate(start.getDate() - 90);
+    return start;
+  }
+  if (rangeId === "6M") {
+    start.setDate(start.getDate() - 180);
+    return start;
+  }
+  if (rangeId === "1Y") {
+    start.setDate(start.getDate() - 365);
+    return start;
+  }
+  return null;
+}
+
+function getEntriesInRange(vehicle, rangeId) {
+  const startDate = getRangeStartDate(rangeId);
+  const entries = vehicle.entries.filter((entry) => entry.date);
+
+  if (!startDate) return entries;
+  return entries.filter((entry) => parseEntryDate(entry) >= startDate);
+}
+
+function getMilesDrivenInRange(vehicle, rangeId) {
+  const odometerEntries = vehicle.entries
+    .filter((entry) => ["fuel", "maintenance"].includes(entry.type) && entry.date && Number(entry.odometer) > 0)
+    .sort((a, b) => {
+      const dateCompare = new Date(a.date) - new Date(b.date);
+      if (dateCompare !== 0) return dateCompare;
+      return Number(a.odometer || 0) - Number(b.odometer || 0);
+    });
+
+  if (odometerEntries.length < 2) return 0;
+
+  const startDate = getRangeStartDate(rangeId);
+  const entriesInRange = startDate
+    ? odometerEntries.filter((entry) => parseEntryDate(entry) >= startDate)
+    : odometerEntries;
+
+  if (entriesInRange.length < 2) return 0;
+
+  const firstOdometer = Number(entriesInRange[0].odometer || 0);
+  const lastOdometer = Number(entriesInRange[entriesInRange.length - 1].odometer || 0);
+
+  return Math.max(0, lastOdometer - firstOdometer);
+}
+
+function calculateRangeStats(vehicle, rangeId) {
+  const entriesInRange = getEntriesInRange(vehicle, rangeId);
+  const fuelEntries = entriesInRange.filter((entry) => entry.type === "fuel");
+  const maintenanceEntries = entriesInRange.filter((entry) => entry.type === "maintenance");
+
+  const totalFuelCost = fuelEntries.reduce((sum, entry) => sum + Number(entry.totalCost || 0), 0);
+  const totalMaintenanceCost = maintenanceEntries.reduce((sum, entry) => sum + Number(entry.cost || 0), 0);
+  const totalCost = totalFuelCost + totalMaintenanceCost;
+  const milesDriven = getMilesDrivenInRange(vehicle, rangeId);
+
+  return {
+    entriesInRange,
+    fuelEntries,
+    maintenanceEntries,
+    totalFuelCost,
+    totalMaintenanceCost,
+    totalCost,
+    milesDriven,
+    fuelCostPerMile: milesDriven > 0 ? totalFuelCost / milesDriven : null,
+    maintenanceCostPerMile: milesDriven > 0 ? totalMaintenanceCost / milesDriven : null,
+    totalCostPerMile: milesDriven > 0 ? totalCost / milesDriven : null,
+  };
+}
+
+function buildMpgSeries(vehicle, rangeId) {
+  const sortedFuelEntries = getFuelEntriesSorted(vehicle);
+  const startDate = getRangeStartDate(rangeId);
+
+  return sortedFuelEntries
+    .map((entry, index) => ({
+      id: entry.id,
+      date: entry.date,
+      value: calculateEntryMpg(sortedFuelEntries, index),
+    }))
+    .filter((point) => point.value !== null)
+    .filter((point) => !startDate || new Date(`${point.date}T00:00:00`) >= startDate);
+}
+
+function buildMonthlyFuelSeries(vehicle, rangeId) {
+  const entries = getEntriesInRange(vehicle, rangeId)
+    .filter((entry) => entry.type === "fuel")
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const byMonth = entries.reduce((acc, entry) => {
+    const key = entry.date.slice(0, 7);
+    acc[key] = (acc[key] || 0) + Number(entry.totalCost || 0);
+    return acc;
+  }, {});
+
+  return Object.entries(byMonth).map(([date, value]) => ({ date, value }));
+}
+
+function buildMilesOverTimeSeries(vehicle, rangeId) {
+  const startDate = getRangeStartDate(rangeId);
+
+  return vehicle.entries
+    .filter((entry) => ["fuel", "maintenance"].includes(entry.type))
+    .filter((entry) => entry.date && Number(entry.odometer) > 0)
+    .filter((entry) => !startDate || parseEntryDate(entry) >= startDate)
+    .sort((a, b) => {
+      const dateCompare = new Date(a.date) - new Date(b.date);
+      if (dateCompare !== 0) return dateCompare;
+      return Number(a.odometer || 0) - Number(b.odometer || 0);
+    })
+    .map((entry) => ({
+      id: entry.id,
+      date: entry.date,
+      value: Number(entry.odometer || 0),
+    }));
+}
+
 function App() {
   const [state, setState] = useState(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState(null);
@@ -529,6 +671,7 @@ function App() {
             onLogFuel={() => setScreen("fuel")}
             onLogMaintenance={() => setScreen("maintenance")}
             onManageSchedule={() => setScreen("schedule")}
+            onViewStats={() => setScreen("stats")}
             onEditVehicle={() => setScreen("editVehicle")}
             onEditEntry={(entryId) => {
               const entry = selectedVehicle.entries.find((entry) => entry.id === entryId);
@@ -540,6 +683,10 @@ function App() {
               setEntryPendingDelete(entry || null);
             }}
           />
+        )}
+
+        {screen === "stats" && selectedVehicle && (
+          <StatsScreen vehicle={selectedVehicle} />
         )}
 
         {screen === "schedule" && selectedVehicle && (
@@ -816,7 +963,7 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
   );
 }
 
-function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onEditVehicle, onEditEntry, onDeleteEntry }) {
+function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onViewStats, onEditVehicle, onEditEntry, onDeleteEntry }) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const stats = calculateFuelStats(vehicle);
   const currentOdometer = getCurrentOdometer(vehicle);
@@ -892,6 +1039,12 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
           className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40"
         >
           <Wrench size={24} /> Log Maintenance
+        </button>
+        <button
+          onClick={onViewStats}
+          className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30"
+        >
+          <BarChart3 size={22} /> Stats & Analytics
         </button>
         <button
           onClick={onManageSchedule}
@@ -1073,8 +1226,263 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
             )}
           </div>
         )}
-      </div>  
+      </div>
+    </div>
+  );
+}
 
+function StatsScreen({ vehicle }) {
+  const [range, setRange] = useState("1Y");
+  const rangeStats = calculateRangeStats(vehicle, range);
+  const mpgSeries = buildMpgSeries(vehicle, range);
+  const monthlyFuelSeries = buildMonthlyFuelSeries(vehicle, range);
+  const milesSeries = buildMilesOverTimeSeries(vehicle, range);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+        <div className="mb-3 flex items-center gap-2">
+          <BarChart3 size={22} className="text-indigo-300" />
+          <div>
+            <h2 className="text-xl font-black tracking-tight">Stats & Analytics</h2>
+            <p className="text-sm text-slate-400">Dynamic views for {vehicle.nickname}</p>
+          </div>
+        </div>
+        <RangeSelector value={range} onChange={setRange} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} />
+        <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} />
+        <DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} />
+        <DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} />
+        <StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} />
+      </div>
+
+      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+        <h2 className="mb-1 text-lg font-bold">MPG Over Time</h2>
+        <p className="mb-3 text-sm text-slate-400">Calculated from fuel entries after the first fill-up.</p>
+        <MiniLineChart
+          data={mpgSeries}
+          valueLabel="MPG"
+          yAxisLabel="MPG"
+          xAxisLabel="Fuel entries"
+          digits={1}
+          emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG."
+        />
+      </div>
+
+      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+        <h2 className="mb-1 text-lg font-bold">Monthly Fuel Spending</h2>
+        <p className="mb-3 text-sm text-slate-400">Fuel spending grouped by month in the selected range.</p>
+        <MiniLineChart
+          data={monthlyFuelSeries}
+          valueLabel="Fuel"
+          yAxisLabel="Dollars"
+          xAxisLabel="Month"
+          formatValue={currency}
+          emptyMessage="Add fuel logs to see monthly spending."
+        />
+      </div>
+
+      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+        <h2 className="mb-1 text-lg font-bold">Miles Over Time</h2>
+        <p className="mb-3 text-sm text-slate-400">Odometer readings from fuel and maintenance entries.</p>
+        <MiniLineChart
+          data={milesSeries}
+          valueLabel="mi"
+          yAxisLabel="Odometer"
+          xAxisLabel="Date"
+          digits={0}
+          emptyMessage="Add entries with odometer readings to see miles over time."
+        />
+      </div>
+
+      <CalculationNotes />
+      <CostBreakdownCard fuel={rangeStats.totalFuelCost} maintenance={rangeStats.totalMaintenanceCost} />
+    </div>
+  );
+}
+
+function RangeSelector({ value, onChange }) {
+  return (
+    <div className="grid grid-cols-6 gap-1 rounded-2xl bg-slate-950 p-1 ring-1 ring-white/10">
+      {rangeOptions.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          className={`rounded-xl px-2 py-2 text-xs font-bold transition ${
+            value === option.id
+              ? "bg-indigo-500 text-white shadow-lg shadow-indigo-950/30"
+              : "text-slate-400"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MiniLineChart({ data, valueLabel, yAxisLabel, xAxisLabel, digits = 0, formatValue, emptyMessage }) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="flex h-44 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">
+        {emptyMessage}
+      </div>
+    );
+  }
+
+  const width = 340;
+  const height = 190;
+  const paddingLeft = 54;
+  const paddingRight = 18;
+  const paddingTop = 22;
+  const paddingBottom = 42;
+  const values = data.map((point) => Number(point.value || 0));
+  const rawMinValue = Math.min(...values);
+  const rawMaxValue = Math.max(...values);
+  const valueRange = rawMaxValue - rawMinValue || 1;
+  const minValue = Math.max(0, rawMinValue - valueRange * 0.08);
+  const maxValue = rawMaxValue + valueRange * 0.08;
+  const adjustedRange = maxValue - minValue || 1;
+
+  const plotWidth = width - paddingLeft - paddingRight;
+  const plotHeight = height - paddingTop - paddingBottom;
+
+  const points = data.map((point, index) => {
+    const x = data.length === 1 ? paddingLeft + plotWidth / 2 : paddingLeft + (index / (data.length - 1)) * plotWidth;
+    const y = paddingTop + plotHeight - ((Number(point.value || 0) - minValue) / adjustedRange) * plotHeight;
+    return { ...point, x, y };
+  });
+
+  const yTicks = Array.from({ length: 4 }, (_, index) => {
+    const fraction = index / 3;
+    const value = minValue + adjustedRange * (1 - fraction);
+    const y = paddingTop + plotHeight * fraction;
+    return { value, y };
+  });
+
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const latest = data[data.length - 1];
+  const firstDate = data[0]?.date || "";
+  const lastDate = data[data.length - 1]?.date || "";
+  const displayValue = formatValue ? formatValue(latest.value) : `${number(latest.value, digits)} ${valueLabel}`;
+  const formatTick = (value) => (formatValue ? formatValue(value) : number(value, digits));
+
+  return (
+    <div className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10">
+      <div className="mb-2 flex items-end justify-between gap-3">
+        <div>
+          <div className="text-2xl font-black">{displayValue}</div>
+          <div className="text-xs text-slate-400">Latest value</div>
+        </div>
+        <div className="text-right text-xs text-slate-400">
+          <div>High: {formatTick(rawMaxValue)}</div>
+          <div>Low: {formatTick(rawMinValue)}</div>
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-52 w-full overflow-visible">
+        {yTicks.map((tick, index) => (
+          <g key={index}>
+            <line
+              x1={paddingLeft}
+              y1={tick.y}
+              x2={width - paddingRight}
+              y2={tick.y}
+              stroke="currentColor"
+              className="text-slate-800"
+              strokeWidth="1"
+            />
+            <text
+              x={paddingLeft - 8}
+              y={tick.y + 4}
+              textAnchor="end"
+              className="fill-slate-400 text-[10px]"
+            >
+              {formatTick(tick.value)}
+            </text>
+          </g>
+        ))}
+
+        <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
+        <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
+
+        <path d={path} fill="none" stroke="currentColor" className="text-cyan-300" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point) => (
+          <circle key={point.id || point.date} cx={point.x} cy={point.y} r="4" fill="currentColor" className="text-cyan-200" />
+        ))}
+
+        <text x={paddingLeft} y={height - 14} textAnchor="start" className="fill-slate-400 text-[10px]">
+          {firstDate}
+        </text>
+        <text x={width - paddingRight} y={height - 14} textAnchor="end" className="fill-slate-400 text-[10px]">
+          {lastDate}
+        </text>
+        <text x={width / 2} y={height - 2} textAnchor="middle" className="fill-slate-500 text-[10px]">
+          {xAxisLabel}
+        </text>
+        <text x="12" y={height / 2} textAnchor="middle" transform={`rotate(-90 12 ${height / 2})`} className="fill-slate-500 text-[10px]">
+          {yAxisLabel}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function CalculationNotes() {
+  return (
+    <div className="rounded-3xl bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-white/10">
+      <h2 className="mb-2 text-lg font-bold text-slate-100">Calculation Notes</h2>
+      <p>
+        Cost-per-mile cards use entries inside the selected range. Miles driven are estimated from the first and last odometer readings in that range.
+      </p>
+      <p className="mt-2">
+        MPG is calculated tank-by-tank from fuel logs: miles since previous fuel log divided by gallons added.
+      </p>
+    </div>
+  );
+}
+
+function CostBreakdownCard({ fuel, maintenance }) {
+  const total = Number(fuel || 0) + Number(maintenance || 0);
+  const fuelPercent = total > 0 ? (Number(fuel || 0) / total) * 100 : 0;
+  const maintenancePercent = total > 0 ? 100 - fuelPercent : 0;
+
+  return (
+    <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+      <h2 className="mb-1 text-lg font-bold">Cost Breakdown</h2>
+      <p className="mb-3 text-sm text-slate-400">Fuel vs maintenance in the selected range.</p>
+
+      {total <= 0 ? (
+        <div className="flex h-32 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">
+          Add fuel or maintenance costs to see a cost breakdown.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="h-5 overflow-hidden rounded-full bg-slate-950 ring-1 ring-white/10">
+            <div className="h-full bg-emerald-500" style={{ width: `${fuelPercent}%` }} />
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-2xl bg-emerald-950/30 p-3 ring-1 ring-emerald-400/20">
+              <div className="font-bold text-emerald-200">Fuel</div>
+              <div>{currency(fuel)}</div>
+              <div className="text-xs text-slate-400">{number(fuelPercent, 0)}%</div>
+            </div>
+            <div className="rounded-2xl bg-blue-950/30 p-3 ring-1 ring-blue-400/20">
+              <div className="font-bold text-blue-200">Maintenance</div>
+              <div>{currency(maintenance)}</div>
+              <div className="text-xs text-slate-400">{number(maintenancePercent, 0)}%</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

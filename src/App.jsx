@@ -1512,7 +1512,6 @@ function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
           <input
             type="file"
             accept="image/*"
-            capture="environment"
             className="hidden"
             onChange={async (event) => {
               const file = event.target.files?.[0];

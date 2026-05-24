@@ -26,30 +26,10 @@ const SOON_DAYS_THRESHOLD = 30;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 const defaultMaintenanceSchedule = [
-  {
-    id: "oil-change",
-    title: "Oil Change",
-    intervalMiles: 5000,
-    intervalMonths: 6,
-  },
-  {
-    id: "tire-rotation",
-    title: "Tire Rotation",
-    intervalMiles: 5000,
-    intervalMonths: 6,
-  },
-  {
-    id: "engine-air-filter",
-    title: "Engine Air Filter",
-    intervalMiles: 30000,
-    intervalMonths: 36,
-  },
-  {
-    id: "cabin-air-filter",
-    title: "Cabin Air Filter",
-    intervalMiles: 15000,
-    intervalMonths: 12,
-  },
+  { id: "oil-change", title: "Oil Change", intervalMiles: 5000, intervalMonths: 6 },
+  { id: "tire-rotation", title: "Tire Rotation", intervalMiles: 5000, intervalMonths: 6 },
+  { id: "engine-air-filter", title: "Engine Air Filter", intervalMiles: 30000, intervalMonths: 36 },
+  { id: "cabin-air-filter", title: "Cabin Air Filter", intervalMiles: 15000, intervalMonths: 12 },
 ];
 
 const rangeOptions = [
@@ -96,9 +76,7 @@ function openDatabase() {
 
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -131,15 +109,100 @@ async function saveState(state) {
 }
 
 function downloadJson(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function escapeCsvValue(value) {
+  if (value === undefined || value === null) return "";
+  const stringValue = String(value);
+  if (stringValue.includes(",") || stringValue.includes("\n") || stringValue.includes('"')) {
+    return `"${stringValue.replaceAll('"', '""')}"`;
+  }
+  return stringValue;
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildCsvRows(state) {
+  const rows = [[
+    "vehicle_nickname",
+    "vehicle_year",
+    "vehicle_make",
+    "vehicle_model",
+    "entry_type",
+    "date",
+    "odometer",
+    "gallons",
+    "fuel_total_cost",
+    "mpg",
+    "miles_since_last_fillup",
+    "station",
+    "maintenance_type",
+    "service_reminder",
+    "maintenance_title",
+    "maintenance_cost",
+    "service_provider",
+    "status",
+    "notes",
+  ]];
+
+  state.vehicles.forEach((vehicle) => {
+    const sortedFuelEntries = getFuelEntriesSorted(vehicle);
+    const mpgByEntryId = Object.fromEntries(
+      sortedFuelEntries.map((entry, index) => [entry.id, calculateEntryMpg(sortedFuelEntries, index)])
+    );
+    const milesByEntryId = Object.fromEntries(
+      sortedFuelEntries.map((entry, index) => {
+        if (index === 0) return [entry.id, null];
+        const previousEntry = sortedFuelEntries[index - 1];
+        const milesDriven = Number(entry.odometer) - Number(previousEntry.odometer);
+        return [entry.id, milesDriven > 0 ? milesDriven : null];
+      })
+    );
+
+    const sortedEntries = [...vehicle.entries].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    sortedEntries.forEach((entry) => {
+      rows.push([
+        vehicle.nickname,
+        vehicle.year,
+        vehicle.make,
+        vehicle.model,
+        entry.type,
+        entry.date,
+        entry.odometer,
+        entry.type === "fuel" ? entry.gallons : "",
+        entry.type === "fuel" ? entry.totalCost : "",
+        entry.type === "fuel" && mpgByEntryId[entry.id] ? mpgByEntryId[entry.id].toFixed(2) : "",
+        entry.type === "fuel" && milesByEntryId[entry.id] ? milesByEntryId[entry.id] : "",
+        entry.type === "fuel" ? entry.station : "",
+        entry.type === "maintenance" ? entry.maintenanceType : "",
+        entry.type === "maintenance" ? getScheduleItemTitle(entry.serviceKey, vehicle) : "",
+        entry.type === "maintenance" ? entry.title : "",
+        entry.type === "maintenance" ? entry.cost : "",
+        entry.type === "maintenance" ? entry.serviceProvider : "",
+        entry.type === "maintenance" ? entry.status : "",
+        entry.notes,
+      ]);
+    });
+  });
+
+  return rows;
 }
 
 function compressImageFile(file, maxWidth = 1600, quality = 0.78) {
@@ -172,17 +235,12 @@ function compressImageFile(file, maxWidth = 1600, quality = 0.78) {
 
 function currency(value) {
   if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) return "—";
-  return Number(value).toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-  });
+  return Number(value).toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
 function number(value, digits = 0) {
   if (value === undefined || value === null || value === "" || Number.isNaN(Number(value))) return "—";
-  return Number(value).toLocaleString(undefined, {
-    maximumFractionDigits: digits,
-  });
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
 function addMonths(dateString, months) {
@@ -217,7 +275,6 @@ function makeServiceId(title) {
 
 function normalizeMaintenanceSchedule(schedule) {
   const source = Array.isArray(schedule) && schedule.length > 0 ? schedule : defaultMaintenanceSchedule;
-
   return source.map((item) => ({
     id: item.id || makeServiceId(item.title),
     title: item.title || "Untitled Service",
@@ -234,63 +291,36 @@ function getFuelEntriesSorted(vehicle) {
 
 function calculateFuelStats(vehicle) {
   const fuelEntries = getFuelEntriesSorted(vehicle);
-
   const mpgValues = fuelEntries
     .map((entry, index) => calculateEntryMpg(fuelEntries, index))
     .filter((mpg) => mpg !== null);
-
   const totalFuelCost = fuelEntries.reduce((sum, entry) => sum + Number(entry.totalCost || 0), 0);
-
   const totalMaintenanceCost = vehicle.entries
     .filter((entry) => entry.type === "maintenance")
     .reduce((sum, entry) => sum + Number(entry.cost || 0), 0);
-
   const avgMpg = mpgValues.length ? mpgValues.reduce((a, b) => a + b, 0) / mpgValues.length : null;
 
-  return {
-    fuelCount: fuelEntries.length,
-    totalFuelCost,
-    totalMaintenanceCost,
-    avgMpg,
-  };
+  return { fuelCount: fuelEntries.length, totalFuelCost, totalMaintenanceCost, avgMpg };
 }
 
 function calculateEntryMpg(sortedFuelEntries, index) {
   if (index === 0) return null;
-
   const currentEntry = sortedFuelEntries[index];
   const previousEntry = sortedFuelEntries[index - 1];
   const milesDriven = Number(currentEntry.odometer) - Number(previousEntry.odometer);
   const gallonsAdded = Number(currentEntry.gallons);
-
   if (milesDriven <= 0 || gallonsAdded <= 0) return null;
   return milesDriven / gallonsAdded;
 }
 
 function getCurrentOdometer(vehicle) {
   const odometerEntries = vehicle.entries.filter(
-    (entry) =>
-      ["fuel", "maintenance"].includes(entry.type) &&
-      entry.date &&
-      Number(entry.odometer) > 0
+    (entry) => ["fuel", "maintenance"].includes(entry.type) && entry.date && Number(entry.odometer) > 0
   );
-
-  if (odometerEntries.length === 0) {
-    return Number(vehicle.odometer || 0);
-  }
-
-  const mostRecentDate = odometerEntries
-    .map((entry) => entry.date)
-    .sort()
-    .at(-1);
-
-  const entriesOnMostRecentDate = odometerEntries.filter(
-    (entry) => entry.date === mostRecentDate
-  );
-
-  return Math.max(
-    ...entriesOnMostRecentDate.map((entry) => Number(entry.odometer))
-  );
+  if (odometerEntries.length === 0) return Number(vehicle.odometer || 0);
+  const mostRecentDate = odometerEntries.map((entry) => entry.date).sort().at(-1);
+  const entriesOnMostRecentDate = odometerEntries.filter((entry) => entry.date === mostRecentDate);
+  return Math.max(...entriesOnMostRecentDate.map((entry) => Number(entry.odometer)));
 }
 
 function getMaintenanceSchedule(vehicle) {
@@ -344,7 +374,6 @@ function calculateMaintenanceReminders(vehicle) {
       const parts = [];
       if (overdueMiles > 0) parts.push(`${number(overdueMiles)} mi`);
       if (overdueMonths > 0) parts.push(`${overdueMonths} mo`);
-
       return {
         ...scheduleItem,
         status: "overdue",
@@ -424,32 +453,18 @@ function parseEntryDate(entry) {
 function getRangeStartDate(rangeId) {
   const today = new Date();
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-
   if (rangeId === "ALL") return null;
   if (rangeId === "YTD") return new Date(today.getFullYear(), 0, 1);
-  if (rangeId === "1M") {
-    start.setDate(start.getDate() - 30);
-    return start;
-  }
-  if (rangeId === "3M") {
-    start.setDate(start.getDate() - 90);
-    return start;
-  }
-  if (rangeId === "6M") {
-    start.setDate(start.getDate() - 180);
-    return start;
-  }
-  if (rangeId === "1Y") {
-    start.setDate(start.getDate() - 365);
-    return start;
-  }
+  if (rangeId === "1M") { start.setDate(start.getDate() - 30); return start; }
+  if (rangeId === "3M") { start.setDate(start.getDate() - 90); return start; }
+  if (rangeId === "6M") { start.setDate(start.getDate() - 180); return start; }
+  if (rangeId === "1Y") { start.setDate(start.getDate() - 365); return start; }
   return null;
 }
 
 function getEntriesInRange(vehicle, rangeId) {
   const startDate = getRangeStartDate(rangeId);
   const entries = vehicle.entries.filter((entry) => entry.date);
-
   if (!startDate) return entries;
   return entries.filter((entry) => parseEntryDate(entry) >= startDate);
 }
@@ -462,19 +477,12 @@ function getMilesDrivenInRange(vehicle, rangeId) {
       if (dateCompare !== 0) return dateCompare;
       return Number(a.odometer || 0) - Number(b.odometer || 0);
     });
-
   if (odometerEntries.length < 2) return 0;
-
   const startDate = getRangeStartDate(rangeId);
-  const entriesInRange = startDate
-    ? odometerEntries.filter((entry) => parseEntryDate(entry) >= startDate)
-    : odometerEntries;
-
+  const entriesInRange = startDate ? odometerEntries.filter((entry) => parseEntryDate(entry) >= startDate) : odometerEntries;
   if (entriesInRange.length < 2) return 0;
-
   const firstOdometer = Number(entriesInRange[0].odometer || 0);
   const lastOdometer = Number(entriesInRange[entriesInRange.length - 1].odometer || 0);
-
   return Math.max(0, lastOdometer - firstOdometer);
 }
 
@@ -482,12 +490,10 @@ function calculateRangeStats(vehicle, rangeId) {
   const entriesInRange = getEntriesInRange(vehicle, rangeId);
   const fuelEntries = entriesInRange.filter((entry) => entry.type === "fuel");
   const maintenanceEntries = entriesInRange.filter((entry) => entry.type === "maintenance");
-
   const totalFuelCost = fuelEntries.reduce((sum, entry) => sum + Number(entry.totalCost || 0), 0);
   const totalMaintenanceCost = maintenanceEntries.reduce((sum, entry) => sum + Number(entry.cost || 0), 0);
   const totalCost = totalFuelCost + totalMaintenanceCost;
   const milesDriven = getMilesDrivenInRange(vehicle, rangeId);
-
   return {
     entriesInRange,
     fuelEntries,
@@ -505,13 +511,8 @@ function calculateRangeStats(vehicle, rangeId) {
 function buildMpgSeries(vehicle, rangeId) {
   const sortedFuelEntries = getFuelEntriesSorted(vehicle);
   const startDate = getRangeStartDate(rangeId);
-
   return sortedFuelEntries
-    .map((entry, index) => ({
-      id: entry.id,
-      date: entry.date,
-      value: calculateEntryMpg(sortedFuelEntries, index),
-    }))
+    .map((entry, index) => ({ id: entry.id, date: entry.date, value: calculateEntryMpg(sortedFuelEntries, index) }))
     .filter((point) => point.value !== null)
     .filter((point) => !startDate || new Date(`${point.date}T00:00:00`) >= startDate);
 }
@@ -520,19 +521,16 @@ function buildMonthlyFuelSeries(vehicle, rangeId) {
   const entries = getEntriesInRange(vehicle, rangeId)
     .filter((entry) => entry.type === "fuel")
     .sort((a, b) => new Date(a.date) - new Date(b.date));
-
   const byMonth = entries.reduce((acc, entry) => {
     const key = entry.date.slice(0, 7);
     acc[key] = (acc[key] || 0) + Number(entry.totalCost || 0);
     return acc;
   }, {});
-
   return Object.entries(byMonth).map(([date, value]) => ({ date, value }));
 }
 
 function buildMilesOverTimeSeries(vehicle, rangeId) {
   const startDate = getRangeStartDate(rangeId);
-
   return vehicle.entries
     .filter((entry) => ["fuel", "maintenance"].includes(entry.type))
     .filter((entry) => entry.date && Number(entry.odometer) > 0)
@@ -542,11 +540,7 @@ function buildMilesOverTimeSeries(vehicle, rangeId) {
       if (dateCompare !== 0) return dateCompare;
       return Number(a.odometer || 0) - Number(b.odometer || 0);
     })
-    .map((entry) => ({
-      id: entry.id,
-      date: entry.date,
-      value: Number(entry.odometer || 0),
-    }));
+    .map((entry) => ({ id: entry.id, date: entry.date, value: Number(entry.odometer || 0) }));
 }
 
 function App() {
@@ -554,15 +548,13 @@ function App() {
   const [selectedVehicleId, setSelectedVehicleId] = useState(null);
   const [selectedEntryId, setSelectedEntryId] = useState(null);
   const [entryPendingDelete, setEntryPendingDelete] = useState(null);
+  const [vehiclePendingDelete, setVehiclePendingDelete] = useState(null);
   const [screen, setScreen] = useState("garage");
   const [status, setStatus] = useState("Loading local database…");
 
   useEffect(() => {
     loadState()
-      .then((loaded) => {
-        setState(loaded);
-        setStatus("Saved locally on this device.");
-      })
+      .then((loaded) => { setState(loaded); setStatus("Saved locally on this device."); })
       .catch((error) => setStatus(`Database error: ${error.message}`));
   }, []);
 
@@ -581,9 +573,7 @@ function App() {
   function updateVehicle(vehicleId, updater) {
     setState((current) => ({
       ...current,
-      vehicles: current.vehicles.map((vehicle) =>
-        vehicle.id === vehicleId ? updater(vehicle) : vehicle
-      ),
+      vehicles: current.vehicles.map((vehicle) => (vehicle.id === vehicleId ? updater(vehicle) : vehicle)),
     }));
   }
 
@@ -606,17 +596,16 @@ function App() {
     updateVehicle(vehicleId, (vehicle) => ({
       ...vehicle,
       odometer: vehicle.odometer,
-      entries: vehicle.entries.map((entry) =>
-        entry.id === updatedEntry.id ? updatedEntry : entry
-      ),
+      entries: vehicle.entries.map((entry) => (entry.id === updatedEntry.id ? updatedEntry : entry)),
     }));
   }
 
   function deleteEntry(vehicleId, entryId) {
-    updateVehicle(vehicleId, (vehicle) => ({
-      ...vehicle,
-      entries: vehicle.entries.filter((entry) => entry.id !== entryId),
-    }));
+    updateVehicle(vehicleId, (vehicle) => ({ ...vehicle, entries: vehicle.entries.filter((entry) => entry.id !== entryId) }));
+  }
+
+  function deleteVehicle(vehicleId) {
+    setState((current) => ({ ...current, vehicles: current.vehicles.filter((vehicle) => vehicle.id !== vehicleId) }));
   }
 
   function exportBackup() {
@@ -624,42 +613,34 @@ function App() {
     downloadJson(`vehicle-records-backup-${date}.json`, state);
   }
 
+  function exportCsv() {
+    const date = new Date().toISOString().slice(0, 10);
+    downloadCsv(`vehicle-records-export-${date}.csv`, buildCsvRows(state));
+  }
+
   async function importBackup(file) {
     if (!file) return;
     const text = await file.text();
     const imported = JSON.parse(text);
-    if (!imported.vehicles || !Array.isArray(imported.vehicles)) {
-      throw new Error("This does not look like a vehicle records backup file.");
-    }
+    if (!imported.vehicles || !Array.isArray(imported.vehicles)) throw new Error("This does not look like a vehicle records backup file.");
     setState(imported);
     setStatus("Backup restored and saved locally.");
   }
 
-  if (!state) {
-    return <div className="min-h-screen bg-slate-950 text-white p-6">{status}</div>;
-  }
+  if (!state) return <div className="min-h-screen bg-slate-950 text-white p-6">{status}</div>;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-md px-4 py-5">
-        <Header
-          screen={screen}
-          vehicle={selectedVehicle}
-          onBack={() => {
-            setScreen("garage");
-            setSelectedVehicleId(null);
-          }}
-        />
+        <Header screen={screen} vehicle={selectedVehicle} onBack={() => { setScreen("garage"); setSelectedVehicleId(null); }} />
 
         {screen === "garage" && (
           <GarageScreen
             state={state}
-            onSelectVehicle={(vehicleId) => {
-              setSelectedVehicleId(vehicleId);
-              setScreen("dashboard");
-            }}
+            onSelectVehicle={(vehicleId) => { setSelectedVehicleId(vehicleId); setScreen("dashboard"); }}
             onAddVehicle={addVehicle}
             onExportBackup={exportBackup}
+            onExportCsv={exportCsv}
             onImportBackup={importBackup}
             status={status}
           />
@@ -685,19 +666,14 @@ function App() {
           />
         )}
 
-        {screen === "stats" && selectedVehicle && (
-          <StatsScreen vehicle={selectedVehicle} />
-        )}
+        {screen === "stats" && selectedVehicle && <StatsScreen vehicle={selectedVehicle} />}
 
         {screen === "schedule" && selectedVehicle && (
           <MaintenanceScheduleForm
             vehicle={selectedVehicle}
             onCancel={() => setScreen("dashboard")}
             onSave={(maintenanceSchedule) => {
-              updateVehicle(selectedVehicle.id, (vehicle) => ({
-                ...vehicle,
-                maintenanceSchedule: normalizeMaintenanceSchedule(maintenanceSchedule),
-              }));
+              updateVehicle(selectedVehicle.id, (vehicle) => ({ ...vehicle, maintenanceSchedule: normalizeMaintenanceSchedule(maintenanceSchedule) }));
               setScreen("dashboard");
             }}
           />
@@ -707,10 +683,8 @@ function App() {
           <VehicleForm
             vehicle={selectedVehicle}
             onCancel={() => setScreen("dashboard")}
-            onSave={(updatedVehicle) => {
-              updateVehicle(selectedVehicle.id, () => updatedVehicle);
-              setScreen("dashboard");
-            }}
+            onRequestDeleteVehicle={() => setVehiclePendingDelete(selectedVehicle)}
+            onSave={(updatedVehicle) => { updateVehicle(selectedVehicle.id, () => updatedVehicle); setScreen("dashboard"); }}
           />
         )}
 
@@ -719,11 +693,7 @@ function App() {
             vehicle={selectedVehicle}
             onCancel={() => setScreen("dashboard")}
             onSave={(entry) => {
-              updateVehicle(selectedVehicle.id, (vehicle) => ({
-                ...vehicle,
-                odometer: vehicle.odometer,
-                entries: [entry, ...vehicle.entries],
-              }));
+              updateVehicle(selectedVehicle.id, (vehicle) => ({ ...vehicle, odometer: vehicle.odometer, entries: [entry, ...vehicle.entries] }));
               setScreen("dashboard");
             }}
           />
@@ -734,11 +704,7 @@ function App() {
             vehicle={selectedVehicle}
             onCancel={() => setScreen("dashboard")}
             onSave={(entry) => {
-              updateVehicle(selectedVehicle.id, (vehicle) => ({
-                ...vehicle,
-                odometer: vehicle.odometer,
-                entries: [entry, ...vehicle.entries],
-              }));
+              updateVehicle(selectedVehicle.id, (vehicle) => ({ ...vehicle, odometer: vehicle.odometer, entries: [entry, ...vehicle.entries] }));
               setScreen("dashboard");
             }}
           />
@@ -748,15 +714,8 @@ function App() {
           <FuelForm
             vehicle={selectedVehicle}
             initialEntry={selectedVehicle.entries.find((entry) => entry.id === selectedEntryId)}
-            onCancel={() => {
-              setSelectedEntryId(null);
-              setScreen("dashboard");
-            }}
-            onSave={(entry) => {
-              updateEntry(selectedVehicle.id, entry);
-              setSelectedEntryId(null);
-              setScreen("dashboard");
-            }}
+            onCancel={() => { setSelectedEntryId(null); setScreen("dashboard"); }}
+            onSave={(entry) => { updateEntry(selectedVehicle.id, entry); setSelectedEntryId(null); setScreen("dashboard"); }}
           />
         )}
 
@@ -764,15 +723,8 @@ function App() {
           <MaintenanceForm
             vehicle={selectedVehicle}
             initialEntry={selectedVehicle.entries.find((entry) => entry.id === selectedEntryId)}
-            onCancel={() => {
-              setSelectedEntryId(null);
-              setScreen("dashboard");
-            }}
-            onSave={(entry) => {
-              updateEntry(selectedVehicle.id, entry);
-              setSelectedEntryId(null);
-              setScreen("dashboard");
-            }}
+            onCancel={() => { setSelectedEntryId(null); setScreen("dashboard"); }}
+            onSave={(entry) => { updateEntry(selectedVehicle.id, entry); setSelectedEntryId(null); setScreen("dashboard"); }}
           />
         )}
 
@@ -780,9 +732,19 @@ function App() {
           <DeleteConfirmModal
             entry={entryPendingDelete}
             onCancel={() => setEntryPendingDelete(null)}
+            onConfirm={() => { deleteEntry(selectedVehicle.id, entryPendingDelete.id); setEntryPendingDelete(null); }}
+          />
+        )}
+
+        {vehiclePendingDelete && (
+          <DeleteVehicleConfirmModal
+            vehicle={vehiclePendingDelete}
+            onCancel={() => setVehiclePendingDelete(null)}
             onConfirm={() => {
-              deleteEntry(selectedVehicle.id, entryPendingDelete.id);
-              setEntryPendingDelete(null);
+              deleteVehicle(vehiclePendingDelete.id);
+              setVehiclePendingDelete(null);
+              setSelectedVehicleId(null);
+              setScreen("garage");
             }}
           />
         )}
@@ -795,48 +757,45 @@ function DeleteConfirmModal({ entry, onCancel, onConfirm }) {
   const title = entry.type === "fuel" ? "Delete Fuel Entry?" : entry.type === "maintenance" ? "Delete Maintenance Entry?" : "Delete Entry?";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 backdrop-blur-sm sm:items-center sm:pb-0"
-      onClick={onCancel}
-    >
-      <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.96 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.18 }}
-        className="w-full max-w-sm rounded-[2rem] bg-slate-900 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/10"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 backdrop-blur-sm sm:items-center sm:pb-0" onClick={onCancel}>
+      <motion.div initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.18 }} className="w-full max-w-sm rounded-[2rem] bg-slate-900 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/10" onClick={(event) => event.stopPropagation()}>
         <div className="mb-4 flex items-center gap-3">
-          <div className="rounded-2xl bg-red-500/15 p-3 text-red-300">
-            <Trash2 size={22} />
-          </div>
-          <div>
-            <h2 className="text-xl font-black tracking-tight">{title}</h2>
-            <p className="text-sm text-slate-400">This cannot be undone.</p>
-          </div>
+          <div className="rounded-2xl bg-red-500/15 p-3 text-red-300"><Trash2 size={22} /></div>
+          <div><h2 className="text-xl font-black tracking-tight">{title}</h2><p className="text-sm text-slate-400">This cannot be undone.</p></div>
         </div>
-
         <div className="mb-4 rounded-2xl bg-slate-950 p-3 text-sm text-slate-300 ring-1 ring-white/10">
           <div>{entry.date} • {number(entry.odometer)} mi</div>
           {entry.type === "fuel" && <div>{number(entry.gallons, 3)} gal • {currency(entry.totalCost)}</div>}
           {entry.type === "maintenance" && <div>{entry.title || "Maintenance"} • {currency(entry.cost)}</div>}
         </div>
-
         <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold text-slate-200"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded-2xl bg-red-600 px-4 py-4 font-bold text-white shadow-lg shadow-red-950/30"
-          >
-            Delete
-          </button>
+          <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold text-slate-200">Cancel</button>
+          <button type="button" onClick={onConfirm} className="rounded-2xl bg-red-600 px-4 py-4 font-bold text-white shadow-lg shadow-red-950/30">Delete</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function DeleteVehicleConfirmModal({ vehicle, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 backdrop-blur-sm sm:items-center sm:pb-0" onClick={onCancel}>
+      <motion.div initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.18 }} className="w-full max-w-sm rounded-[2rem] bg-slate-900 p-5 shadow-2xl shadow-black/40 ring-1 ring-white/10" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-4 flex items-center gap-3">
+          <div className="rounded-2xl bg-red-500/15 p-3 text-red-300"><Trash2 size={22} /></div>
+          <div>
+            <h2 className="text-xl font-black tracking-tight">Remove Vehicle?</h2>
+            <p className="text-sm text-slate-400">This will remove the vehicle and all of its logs from this device.</p>
+          </div>
+        </div>
+        <div className="mb-4 rounded-2xl bg-slate-950 p-3 text-sm text-slate-300 ring-1 ring-white/10">
+          <div className="font-bold">{vehicle.nickname || "Untitled Vehicle"}</div>
+          <div>{[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}</div>
+          <div>{vehicle.entries.length} saved entries</div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold text-slate-200">Cancel</button>
+          <button type="button" onClick={onConfirm} className="rounded-2xl bg-red-600 px-4 py-4 font-bold text-white shadow-lg shadow-red-950/30">Remove</button>
         </div>
       </motion.div>
     </div>
@@ -846,26 +805,16 @@ function DeleteConfirmModal({ entry, onCancel, onConfirm }) {
 function Header({ screen, vehicle, onBack }) {
   return (
     <div className="mb-5 flex items-center gap-3">
-      {screen !== "garage" && (
-        <button
-          onClick={onBack}
-          className="rounded-2xl bg-slate-800 p-3 shadow-lg shadow-black/20"
-          aria-label="Back to garage"
-        >
-          <ArrowLeft size={20} />
-        </button>
-      )}
+      {screen !== "garage" && <button onClick={onBack} className="rounded-2xl bg-slate-800 p-3 shadow-lg shadow-black/20" aria-label="Back to garage"><ArrowLeft size={20} /></button>}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          {screen === "garage" ? "Vehicle Records" : vehicle?.nickname || "Vehicle"}
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight">{screen === "garage" ? "Vehicle Records" : vehicle?.nickname || "Vehicle"}</h1>
         <p className="text-sm text-slate-400">Vehicle Records App</p>
       </div>
     </div>
   );
 }
 
-function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, onImportBackup, status }) {
+function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, onExportCsv, onImportBackup, status }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-4">
@@ -873,34 +822,17 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
           const stats = calculateFuelStats(vehicle);
           const currentOdometer = getCurrentOdometer(vehicle);
           const reminderSummary = getReminderSummary(vehicle);
-
           return (
-            <motion.button
-              key={vehicle.id}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => onSelectVehicle(vehicle.id)}
-              className="relative overflow-hidden rounded-3xl bg-slate-900 text-left shadow-xl shadow-black/20 ring-1 ring-white/10"
-            >
-              {reminderSummary && (
-                <div className={`absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black shadow-lg ${reminderSummary.className}`}>
-                  <AlertTriangle size={14} /> {reminderSummary.label}
-                </div>
-              )}
-
+            <motion.button key={vehicle.id} whileTap={{ scale: 0.98 }} onClick={() => onSelectVehicle(vehicle.id)} className="relative overflow-hidden rounded-3xl bg-slate-900 text-left shadow-xl shadow-black/20 ring-1 ring-white/10">
+              {reminderSummary && <div className={`absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black shadow-lg ${reminderSummary.className}`}><AlertTriangle size={14} /> {reminderSummary.label}</div>}
               <div className="flex h-36 items-center justify-center bg-gradient-to-br from-indigo-500 via-sky-500 to-cyan-400">
-                {vehicle.photo ? (
-                  <img src={vehicle.photo} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <Car size={64} className="text-white/90" />
-                )}
+                {vehicle.photo ? <img src={vehicle.photo} alt="" className="h-full w-full object-cover" /> : <Car size={64} className="text-white/90" />}
               </div>
               <div className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-bold">{vehicle.nickname}</h2>
-                    <p className="text-sm text-slate-400">
-                      {[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}
-                    </p>
+                    <p className="text-sm text-slate-400">{[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}</p>
                   </div>
                   <div className="rounded-2xl bg-slate-800 px-3 py-2 text-right text-sm">
                     <div className="font-semibold">{number(currentOdometer)} mi</div>
@@ -908,16 +840,8 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                  <StatPill
-                    label="Logs"
-                    value={`${stats.fuelCount} fuel • ${
-                      vehicle.entries.filter((entry) => entry.type === "maintenance").length
-                    } maintenance`}
-                  />
-                  <StatPill
-                    label="Avg MPG"
-                    value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"}
-                  />
+                  <StatPill label="Logs" value={`${stats.fuelCount} fuel • ${vehicle.entries.filter((entry) => entry.type === "maintenance").length} maintenance`} />
+                  <StatPill label="Avg MPG" value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"} />
                 </div>
               </div>
             </motion.button>
@@ -925,36 +849,18 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
         })}
       </div>
 
-      <button
-        onClick={onAddVehicle}
-        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold shadow-lg shadow-black/20"
-      >
-        <Plus size={18} /> Add Vehicle
-      </button>
+      <button onClick={onAddVehicle} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold shadow-lg shadow-black/20"><Plus size={18} /> Add Vehicle</button>
 
       <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
         <h2 className="mb-3 font-bold">Backup & Restore</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={onExportBackup}
-            className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 font-semibold"
-          >
-            <Download size={18} /> Backup
-          </button>
+        <div className="grid gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={onExportBackup} className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 font-semibold"><Download size={18} /> Backup</button>
+            <button onClick={onExportCsv} className="flex items-center justify-center gap-2 rounded-2xl bg-indigo-500 px-4 py-3 font-semibold text-white"><Download size={18} /> CSV</button>
+          </div>
           <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-3 font-semibold">
             <Upload size={18} /> Restore
-            <input
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={async (event) => {
-                try {
-                  await onImportBackup(event.target.files?.[0]);
-                } catch (error) {
-                  alert(error.message);
-                }
-              }}
-            />
+            <input type="file" accept="application/json" className="hidden" onChange={async (event) => { try { await onImportBackup(event.target.files?.[0]); } catch (error) { alert(error.message); } }} />
           </label>
         </div>
         <p className="mt-3 text-xs text-slate-400">{status}</p>
@@ -970,54 +876,27 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
   const reminders = calculateMaintenanceReminders(vehicle);
   const activeReminders = reminders.filter((reminder) => reminder.status !== "ok");
   const sortedFuelEntries = getFuelEntriesSorted(vehicle);
-  const mpgByEntryId = Object.fromEntries(
-    sortedFuelEntries.map((entry, index) => [entry.id, calculateEntryMpg(sortedFuelEntries, index)])
-  );
-  const milesByEntryId = Object.fromEntries(
-    sortedFuelEntries.map((entry, index) => {
-      if (index === 0) return [entry.id, null];
-
-      const previousEntry = sortedFuelEntries[index - 1];
-      const milesDriven = Number(entry.odometer) - Number(previousEntry.odometer);
-
-      return [entry.id, milesDriven > 0 ? milesDriven : null];
-    })
-  );
+  const mpgByEntryId = Object.fromEntries(sortedFuelEntries.map((entry, index) => [entry.id, calculateEntryMpg(sortedFuelEntries, index)]));
+  const milesByEntryId = Object.fromEntries(sortedFuelEntries.map((entry, index) => {
+    if (index === 0) return [entry.id, null];
+    const previousEntry = sortedFuelEntries[index - 1];
+    const milesDriven = Number(entry.odometer) - Number(previousEntry.odometer);
+    return [entry.id, milesDriven > 0 ? milesDriven : null];
+  }));
   const sortedEntries = [...vehicle.entries].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   return (
     <div className="space-y-4">
       <div className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950 shadow-2xl shadow-black/30 ring-1 ring-white/10">
         <div className="flex h-40 items-center justify-center bg-gradient-to-br from-cyan-400/30 via-sky-500/20 to-indigo-500/20">
-          {vehicle.photo ? (
-            <img src={vehicle.photo} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Car size={76} className="text-white/70" />
-          )}
+          {vehicle.photo ? <img src={vehicle.photo} alt="" className="h-full w-full object-cover" /> : <Car size={76} className="text-white/70" />}
         </div>
-
         <div className="p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-2xl font-black tracking-tight">{vehicle.nickname}</div>
-              <div className="text-sm text-slate-400">
-                {[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}
-              </div>
-            </div>
-            <button
-              onClick={onEditVehicle}
-              className="rounded-2xl bg-white/10 p-3 text-slate-200 backdrop-blur-xl"
-              aria-label="Edit vehicle"
-            >
-              <Pencil size={18} />
-            </button>
+            <div><div className="text-2xl font-black tracking-tight">{vehicle.nickname}</div><div className="text-sm text-slate-400">{[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}</div></div>
+            <button onClick={onEditVehicle} className="rounded-2xl bg-white/10 p-3 text-slate-200 backdrop-blur-xl" aria-label="Edit vehicle"><Pencil size={18} /></button>
           </div>
-
-          <div className="mb-4 rounded-2xl bg-black/20 px-3 py-2 text-right backdrop-blur-xl">
-            <div className="text-lg font-bold">{number(currentOdometer)} mi</div>
-            <div className="text-xs text-slate-400">current odometer</div>
-          </div>
-
+          <div className="mb-4 rounded-2xl bg-black/20 px-3 py-2 text-right backdrop-blur-xl"><div className="text-lg font-bold">{number(currentOdometer)} mi</div><div className="text-xs text-slate-400">current odometer</div></div>
           <div className="grid grid-cols-2 gap-3">
             <DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Entries" value={vehicle.entries.length} />
             <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Avg MPG" value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"} />
@@ -1028,59 +907,21 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
       </div>
 
       <div className="grid gap-3">
-        <button
-          onClick={onLogFuel}
-          className="flex items-center justify-center gap-3 rounded-3xl bg-emerald-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-950/40"
-        >
-          <Fuel size={24} /> Log Fuel
-        </button>
-        <button
-          onClick={onLogMaintenance}
-          className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40"
-        >
-          <Wrench size={24} /> Log Maintenance
-        </button>
-        <button
-          onClick={onViewStats}
-          className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30"
-        >
-          <BarChart3 size={22} /> Stats & Analytics
-        </button>
-        <button
-          onClick={onManageSchedule}
-          className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20"
-        >
-          <ClipboardList size={22} /> Manage Maintenance Schedule
-        </button>
+        <button onClick={onLogFuel} className="flex items-center justify-center gap-3 rounded-3xl bg-emerald-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-950/40"><Fuel size={24} /> Log Fuel</button>
+        <button onClick={onLogMaintenance} className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40"><Wrench size={24} /> Log Maintenance</button>
+        <button onClick={onViewStats} className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30"><BarChart3 size={22} /> Stats & Analytics</button>
+        <button onClick={onManageSchedule} className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20"><ClipboardList size={22} /> Manage Maintenance Schedule</button>
       </div>
 
       {activeReminders.length > 0 && (
         <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-          <h2 className="mb-3 flex items-center gap-2 text-lg font-bold">
-            <AlertTriangle size={20} className="text-amber-300" /> Maintenance Reminders
-          </h2>
+          <h2 className="mb-3 flex items-center gap-2 text-lg font-bold"><AlertTriangle size={20} className="text-amber-300" /> Maintenance Reminders</h2>
           <div className="space-y-3">
             {activeReminders.map((reminder) => (
               <div key={reminder.id} className={`rounded-2xl border p-3 ${reminder.cardClass}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-bold">{reminder.title}</div>
-                    <div className="text-sm text-slate-300">{reminder.message}</div>
-                  </div>
-                  <span className={`rounded-full px-2 py-1 text-xs font-bold ring-1 ${reminder.badgeClass}`}>
-                    {reminder.status === "no-record" ? "No record" : reminder.status}
-                  </span>
-                </div>
-                {reminder.lastLog && (
-                  <div className="mt-2 text-xs text-slate-400">
-                    Last done: {reminder.lastLog.date} • {number(reminder.lastLog.odometer)} mi
-                  </div>
-                )}
-                {reminder.nextDueMileage && reminder.dueDate && (
-                  <div className="mt-1 text-xs text-slate-400">
-                    Next due: {number(reminder.nextDueMileage)} mi • {reminder.dueDate}
-                  </div>
-                )}
+                <div className="flex items-start justify-between gap-3"><div><div className="font-bold">{reminder.title}</div><div className="text-sm text-slate-300">{reminder.message}</div></div><span className={`rounded-full px-2 py-1 text-xs font-bold ring-1 ${reminder.badgeClass}`}>{reminder.status === "no-record" ? "No record" : reminder.status}</span></div>
+                {reminder.lastLog && <div className="mt-2 text-xs text-slate-400">Last done: {reminder.lastLog.date} • {number(reminder.lastLog.odometer)} mi</div>}
+                {reminder.nextDueMileage && reminder.dueDate && <div className="mt-1 text-xs text-slate-400">Next due: {number(reminder.nextDueMileage)} mi • {reminder.dueDate}</div>}
               </div>
             ))}
           </div>
@@ -1088,138 +929,28 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
       )}
 
       <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-        <button
-          type="button"
-          onClick={() => setHistoryExpanded((current) => !current)}
-          className="flex w-full items-center justify-between"
-        >
-          <div>
-            <h2 className="text-left text-lg font-bold">Recent History</h2>
-            <p className="text-left text-sm text-slate-400">
-              {sortedEntries.length} entries
-            </p>
-          </div>
-
-          <motion.div
-            animate={{ rotate: historyExpanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <ChevronDown size={22} className="text-slate-300" />
-          </motion.div>
+        <button type="button" onClick={() => setHistoryExpanded((current) => !current)} className="flex w-full items-center justify-between">
+          <div><h2 className="text-left text-lg font-bold">Recent History</h2><p className="text-left text-sm text-slate-400">{sortedEntries.length} entries</p></div>
+          <motion.div animate={{ rotate: historyExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}><ChevronDown size={22} className="text-slate-300" /></motion.div>
         </button>
-
         {historyExpanded && (
           <div className="mt-4">
-            {sortedEntries.length === 0 ? (
-              <p className="text-sm text-slate-400">No entries yet.</p>
-            ) : (
+            {sortedEntries.length === 0 ? <p className="text-sm text-slate-400">No entries yet.</p> : (
               <div className="space-y-3">
                 {sortedEntries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`rounded-2xl p-3 border shadow-lg ${
-                      entry.type === "fuel"
-                        ? "bg-gradient-to-br from-emerald-950/40 to-slate-800 border-emerald-500/20 shadow-emerald-950/20"
-                        : entry.type === "maintenance"
-                        ? "bg-gradient-to-br from-blue-950/50 via-indigo-950/30 to-slate-800 border-blue-500/30 shadow-blue-950/30"
-                        : "bg-slate-800 border-white/5"
-                    }`}
-                  >
+                  <div key={entry.id} className={`rounded-2xl p-3 border shadow-lg ${entry.type === "fuel" ? "bg-gradient-to-br from-emerald-950/40 to-slate-800 border-emerald-500/20 shadow-emerald-950/20" : entry.type === "maintenance" ? "bg-gradient-to-br from-blue-950/50 via-indigo-950/30 to-slate-800 border-blue-500/30 shadow-blue-950/30" : "bg-slate-800 border-white/5"}`}>
                     <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold capitalize">{entry.type}</div>
-                        <div className="text-sm text-slate-400">
-                          {entry.date} • {number(entry.odometer)} mi
-                        </div>
-                      </div>
-
+                      <div><div className="font-semibold capitalize">{entry.type}</div><div className="text-sm text-slate-400">{entry.date} • {number(entry.odometer)} mi</div></div>
                       <div className="flex gap-2">
-                        {(entry.type === "fuel" || entry.type === "maintenance") && (
-                          <button
-                            onClick={() => onEditEntry(entry.id)}
-                            className="rounded-xl bg-slate-700 p-2 text-slate-300"
-                            aria-label="Edit entry"
-                          >
-                            <Pencil size={16} />
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => onDeleteEntry(entry.id)}
-                          className="rounded-xl bg-slate-700 p-2 text-slate-300"
-                          aria-label="Delete entry"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {(entry.type === "fuel" || entry.type === "maintenance") && <button onClick={() => onEditEntry(entry.id)} className="rounded-xl bg-slate-700 p-2 text-slate-300" aria-label="Edit entry"><Pencil size={16} /></button>}
+                        <button onClick={() => onDeleteEntry(entry.id)} className="rounded-xl bg-slate-700 p-2 text-slate-300" aria-label="Delete entry"><Trash2 size={16} /></button>
                       </div>
                     </div>
-
-                    {entry.type === "fuel" && (
-                      <div className="mt-2 text-sm text-slate-300">
-                        {milesByEntryId[entry.id]
-                          ? `${number(milesByEntryId[entry.id])} mi since last fill-up`
-                          : "Miles pending"}{" "}
-                        • {number(entry.gallons, 3)} gal •{" "}
-                        {currency(entry.totalCost)} •{" "}
-                        {mpgByEntryId[entry.id]
-                          ? `${number(mpgByEntryId[entry.id], 1)} MPG`
-                          : "MPG pending"}
-                        {entry.station ? ` • ${entry.station}` : ""}
-                      </div>
-                    )}
-
-                    {entry.type === "maintenance" && (
-                      <div className="mt-2 text-sm text-slate-300">
-                        <div className="font-semibold">
-                          {entry.title || "Maintenance"}
-                        </div>
-
-                        <div>
-                          {entry.maintenanceType} • {entry.status} •{" "}
-                          {currency(entry.cost)}
-                        </div>
-
-                        {entry.serviceKey && (
-                          <div className="text-slate-400">
-                            Satisfies:{" "}
-                            {getScheduleItemTitle(entry.serviceKey, vehicle)}
-                          </div>
-                        )}
-
-                        {entry.serviceProvider && (
-                          <div className="text-slate-400">
-                            {entry.serviceProvider}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {entry.photo && (
-                      <img
-                        src={entry.photo}
-                        alt="Fuel log attachment"
-                        className="mt-3 h-36 w-full rounded-2xl object-cover ring-1 ring-white/10"
-                      />
-                    )}
-
-                    {entry.attachments?.length > 0 && (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        {entry.attachments.map((attachment, index) => (
-                          <img
-                            key={index}
-                            src={attachment}
-                            alt={`Maintenance attachment ${index + 1}`}
-                            className="h-28 w-full rounded-2xl object-cover ring-1 ring-white/10"
-                          />
-                        ))}
-                      </div>
-                    )}
-
-                    {entry.notes && (
-                      <p className="mt-2 text-sm text-slate-400">
-                        {entry.notes}
-                      </p>
-                    )}
+                    {entry.type === "fuel" && <div className="mt-2 text-sm text-slate-300">{milesByEntryId[entry.id] ? `${number(milesByEntryId[entry.id])} mi since last fill-up` : "Miles pending"} • {number(entry.gallons, 3)} gal • {currency(entry.totalCost)} • {mpgByEntryId[entry.id] ? `${number(mpgByEntryId[entry.id], 1)} MPG` : "MPG pending"}{entry.station ? ` • ${entry.station}` : ""}</div>}
+                    {entry.type === "maintenance" && <div className="mt-2 text-sm text-slate-300"><div className="font-semibold">{entry.title || "Maintenance"}</div><div>{entry.maintenanceType} • {entry.status} • {currency(entry.cost)}</div>{entry.serviceKey && <div className="text-slate-400">Satisfies: {getScheduleItemTitle(entry.serviceKey, vehicle)}</div>}{entry.serviceProvider && <div className="text-slate-400">{entry.serviceProvider}</div>}</div>}
+                    {entry.photo && <img src={entry.photo} alt="Fuel log attachment" className="mt-3 h-36 w-full rounded-2xl object-cover ring-1 ring-white/10" />}
+                    {entry.attachments?.length > 0 && <div className="mt-3 grid grid-cols-2 gap-2">{entry.attachments.map((attachment, index) => <img key={index} src={attachment} alt={`Maintenance attachment ${index + 1}`} className="h-28 w-full rounded-2xl object-cover ring-1 ring-white/10" />)}</div>}
+                    {entry.notes && <p className="mt-2 text-sm text-slate-400">{entry.notes}</p>}
                   </div>
                 ))}
               </div>
@@ -1240,399 +971,110 @@ function StatsScreen({ vehicle }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-        <div className="mb-3 flex items-center gap-2">
-          <BarChart3 size={22} className="text-indigo-300" />
-          <div>
-            <h2 className="text-xl font-black tracking-tight">Stats & Analytics</h2>
-            <p className="text-sm text-slate-400">Dynamic views for {vehicle.nickname}</p>
-          </div>
-        </div>
-        <RangeSelector value={range} onChange={setRange} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} />
-        <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} />
-        <DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} />
-        <DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} />
-        <StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} />
-      </div>
-
-      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-        <h2 className="mb-1 text-lg font-bold">MPG Over Time</h2>
-        <p className="mb-3 text-sm text-slate-400">Calculated from fuel entries after the first fill-up.</p>
-        <MiniLineChart
-          data={mpgSeries}
-          valueLabel="MPG"
-          yAxisLabel="MPG"
-          xAxisLabel="Fuel entries"
-          digits={1}
-          emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG."
-        />
-      </div>
-
-      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-        <h2 className="mb-1 text-lg font-bold">Monthly Fuel Spending</h2>
-        <p className="mb-3 text-sm text-slate-400">Fuel spending grouped by month in the selected range.</p>
-        <MiniLineChart
-          data={monthlyFuelSeries}
-          valueLabel="Fuel"
-          yAxisLabel="Dollars"
-          xAxisLabel="Month"
-          formatValue={currency}
-          emptyMessage="Add fuel logs to see monthly spending."
-        />
-      </div>
-
-      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-        <h2 className="mb-1 text-lg font-bold">Miles Over Time</h2>
-        <p className="mb-3 text-sm text-slate-400">Odometer readings from fuel and maintenance entries.</p>
-        <MiniLineChart
-          data={milesSeries}
-          valueLabel="mi"
-          yAxisLabel="Odometer"
-          xAxisLabel="Date"
-          digits={0}
-          emptyMessage="Add entries with odometer readings to see miles over time."
-        />
-      </div>
-
+      <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"><div className="mb-3 flex items-center gap-2"><BarChart3 size={22} className="text-indigo-300" /><div><h2 className="text-xl font-black tracking-tight">Stats & Analytics</h2><p className="text-sm text-slate-400">Dynamic views for {vehicle.nickname}</p></div></div><RangeSelector value={range} onChange={setRange} /></div>
+      <div className="grid grid-cols-2 gap-3"><DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} /><DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} /><DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} /><DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} /></div>
+      <div className="grid grid-cols-2 gap-3"><StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} /><StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} /></div>
+      <ChartCard title="MPG Over Time" subtitle="Calculated from fuel entries after the first fill-up."><MiniLineChart data={mpgSeries} valueLabel="MPG" yAxisLabel="MPG" xAxisLabel="Fuel entries" digits={1} emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG." /></ChartCard>
+      <ChartCard title="Monthly Fuel Spending" subtitle="Fuel spending grouped by month in the selected range."><MiniLineChart data={monthlyFuelSeries} valueLabel="Fuel" yAxisLabel="Dollars" xAxisLabel="Month" formatValue={currency} emptyMessage="Add fuel logs to see monthly spending." /></ChartCard>
+      <ChartCard title="Miles Over Time" subtitle="Odometer readings from fuel and maintenance entries."><MiniLineChart data={milesSeries} valueLabel="mi" yAxisLabel="Odometer" xAxisLabel="Date" digits={0} emptyMessage="Add entries with odometer readings to see miles over time." /></ChartCard>
       <CalculationNotes />
       <CostBreakdownCard fuel={rangeStats.totalFuelCost} maintenance={rangeStats.totalMaintenanceCost} />
     </div>
   );
 }
 
+function ChartCard({ title, subtitle, children }) {
+  return <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"><h2 className="mb-1 text-lg font-bold">{title}</h2><p className="mb-3 text-sm text-slate-400">{subtitle}</p>{children}</div>;
+}
+
 function RangeSelector({ value, onChange }) {
-  return (
-    <div className="grid grid-cols-6 gap-1 rounded-2xl bg-slate-950 p-1 ring-1 ring-white/10">
-      {rangeOptions.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          onClick={() => onChange(option.id)}
-          className={`rounded-xl px-2 py-2 text-xs font-bold transition ${
-            value === option.id
-              ? "bg-indigo-500 text-white shadow-lg shadow-indigo-950/30"
-              : "text-slate-400"
-          }`}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <div className="grid grid-cols-6 gap-1 rounded-2xl bg-slate-950 p-1 ring-1 ring-white/10">{rangeOptions.map((option) => <button key={option.id} type="button" onClick={() => onChange(option.id)} className={`rounded-xl px-2 py-2 text-xs font-bold transition ${value === option.id ? "bg-indigo-500 text-white shadow-lg shadow-indigo-950/30" : "text-slate-400"}`}>{option.label}</button>)}</div>;
 }
 
 function MiniLineChart({ data, valueLabel, yAxisLabel, xAxisLabel, digits = 0, formatValue, emptyMessage }) {
-  if (!data || data.length === 0) {
-    return (
-      <div className="flex h-44 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">
-        {emptyMessage}
-      </div>
-    );
-  }
-
-  const width = 340;
-  const height = 190;
-  const paddingLeft = 54;
-  const paddingRight = 18;
-  const paddingTop = 22;
-  const paddingBottom = 42;
+  if (!data || data.length === 0) return <div className="flex h-44 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">{emptyMessage}</div>;
+  const width = 340, height = 190, paddingLeft = 54, paddingRight = 18, paddingTop = 22, paddingBottom = 42;
   const values = data.map((point) => Number(point.value || 0));
-  const rawMinValue = Math.min(...values);
-  const rawMaxValue = Math.max(...values);
+  const rawMinValue = Math.min(...values), rawMaxValue = Math.max(...values);
   const valueRange = rawMaxValue - rawMinValue || 1;
   const minValue = Math.max(0, rawMinValue - valueRange * 0.08);
   const maxValue = rawMaxValue + valueRange * 0.08;
   const adjustedRange = maxValue - minValue || 1;
-
   const plotWidth = width - paddingLeft - paddingRight;
   const plotHeight = height - paddingTop - paddingBottom;
-
   const points = data.map((point, index) => {
     const x = data.length === 1 ? paddingLeft + plotWidth / 2 : paddingLeft + (index / (data.length - 1)) * plotWidth;
     const y = paddingTop + plotHeight - ((Number(point.value || 0) - minValue) / adjustedRange) * plotHeight;
     return { ...point, x, y };
   });
-
   const yTicks = Array.from({ length: 4 }, (_, index) => {
     const fraction = index / 3;
-    const value = minValue + adjustedRange * (1 - fraction);
-    const y = paddingTop + plotHeight * fraction;
-    return { value, y };
+    return { value: minValue + adjustedRange * (1 - fraction), y: paddingTop + plotHeight * fraction };
   });
-
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
   const latest = data[data.length - 1];
   const firstDate = data[0]?.date || "";
   const lastDate = data[data.length - 1]?.date || "";
   const displayValue = formatValue ? formatValue(latest.value) : `${number(latest.value, digits)} ${valueLabel}`;
   const formatTick = (value) => (formatValue ? formatValue(value) : number(value, digits));
-
   return (
     <div className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10">
-      <div className="mb-2 flex items-end justify-between gap-3">
-        <div>
-          <div className="text-2xl font-black">{displayValue}</div>
-          <div className="text-xs text-slate-400">Latest value</div>
-        </div>
-        <div className="text-right text-xs text-slate-400">
-          <div>High: {formatTick(rawMaxValue)}</div>
-          <div>Low: {formatTick(rawMinValue)}</div>
-        </div>
-      </div>
-
+      <div className="mb-2 flex items-end justify-between gap-3"><div><div className="text-2xl font-black">{displayValue}</div><div className="text-xs text-slate-400">Latest value</div></div><div className="text-right text-xs text-slate-400"><div>High: {formatTick(rawMaxValue)}</div><div>Low: {formatTick(rawMinValue)}</div></div></div>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-52 w-full overflow-visible">
-        {yTicks.map((tick, index) => (
-          <g key={index}>
-            <line
-              x1={paddingLeft}
-              y1={tick.y}
-              x2={width - paddingRight}
-              y2={tick.y}
-              stroke="currentColor"
-              className="text-slate-800"
-              strokeWidth="1"
-            />
-            <text
-              x={paddingLeft - 8}
-              y={tick.y + 4}
-              textAnchor="end"
-              className="fill-slate-400 text-[10px]"
-            >
-              {formatTick(tick.value)}
-            </text>
-          </g>
-        ))}
-
+        {yTicks.map((tick, index) => <g key={index}><line x1={paddingLeft} y1={tick.y} x2={width - paddingRight} y2={tick.y} stroke="currentColor" className="text-slate-800" strokeWidth="1" /><text x={paddingLeft - 8} y={tick.y + 4} textAnchor="end" className="fill-slate-400 text-[10px]">{formatTick(tick.value)}</text></g>)}
         <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
         <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
-
         <path d={path} fill="none" stroke="currentColor" className="text-cyan-300" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-        {points.map((point) => (
-          <circle key={point.id || point.date} cx={point.x} cy={point.y} r="4" fill="currentColor" className="text-cyan-200" />
-        ))}
-
-        <text x={paddingLeft} y={height - 14} textAnchor="start" className="fill-slate-400 text-[10px]">
-          {firstDate}
-        </text>
-        <text x={width - paddingRight} y={height - 14} textAnchor="end" className="fill-slate-400 text-[10px]">
-          {lastDate}
-        </text>
-        <text x={width / 2} y={height - 2} textAnchor="middle" className="fill-slate-500 text-[10px]">
-          {xAxisLabel}
-        </text>
-        <text x="12" y={height / 2} textAnchor="middle" transform={`rotate(-90 12 ${height / 2})`} className="fill-slate-500 text-[10px]">
-          {yAxisLabel}
-        </text>
+        {points.map((point) => <circle key={point.id || point.date} cx={point.x} cy={point.y} r="4" fill="currentColor" className="text-cyan-200" />)}
+        <text x={paddingLeft} y={height - 14} textAnchor="start" className="fill-slate-400 text-[10px]">{firstDate}</text>
+        <text x={width - paddingRight} y={height - 14} textAnchor="end" className="fill-slate-400 text-[10px]">{lastDate}</text>
+        <text x={width / 2} y={height - 2} textAnchor="middle" className="fill-slate-500 text-[10px]">{xAxisLabel}</text>
+        <text x="12" y={height / 2} textAnchor="middle" transform={`rotate(-90 12 ${height / 2})`} className="fill-slate-500 text-[10px]">{yAxisLabel}</text>
       </svg>
     </div>
   );
 }
 
 function CalculationNotes() {
-  return (
-    <div className="rounded-3xl bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-white/10">
-      <h2 className="mb-2 text-lg font-bold text-slate-100">Calculation Notes</h2>
-      <p>
-        Cost-per-mile cards use entries inside the selected range. Miles driven are estimated from the first and last odometer readings in that range.
-      </p>
-      <p className="mt-2">
-        MPG is calculated tank-by-tank from fuel logs: miles since previous fuel log divided by gallons added.
-      </p>
-    </div>
-  );
+  return <div className="rounded-3xl bg-slate-900 p-4 text-sm text-slate-400 ring-1 ring-white/10"><h2 className="mb-2 text-lg font-bold text-slate-100">Calculation Notes</h2><p>Cost-per-mile cards use entries inside the selected range. Miles driven are estimated from the first and last odometer readings in that range.</p><p className="mt-2">MPG is calculated tank-by-tank from fuel logs: miles since previous fuel log divided by gallons added.</p></div>;
 }
 
 function CostBreakdownCard({ fuel, maintenance }) {
   const total = Number(fuel || 0) + Number(maintenance || 0);
   const fuelPercent = total > 0 ? (Number(fuel || 0) / total) * 100 : 0;
   const maintenancePercent = total > 0 ? 100 - fuelPercent : 0;
-
   return (
-    <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-      <h2 className="mb-1 text-lg font-bold">Cost Breakdown</h2>
-      <p className="mb-3 text-sm text-slate-400">Fuel vs maintenance in the selected range.</p>
-
-      {total <= 0 ? (
-        <div className="flex h-32 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">
-          Add fuel or maintenance costs to see a cost breakdown.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div className="h-5 overflow-hidden rounded-full bg-slate-950 ring-1 ring-white/10">
-            <div className="h-full bg-emerald-500" style={{ width: `${fuelPercent}%` }} />
-          </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded-2xl bg-emerald-950/30 p-3 ring-1 ring-emerald-400/20">
-              <div className="font-bold text-emerald-200">Fuel</div>
-              <div>{currency(fuel)}</div>
-              <div className="text-xs text-slate-400">{number(fuelPercent, 0)}%</div>
-            </div>
-            <div className="rounded-2xl bg-blue-950/30 p-3 ring-1 ring-blue-400/20">
-              <div className="font-bold text-blue-200">Maintenance</div>
-              <div>{currency(maintenance)}</div>
-              <div className="text-xs text-slate-400">{number(maintenancePercent, 0)}%</div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"><h2 className="mb-1 text-lg font-bold">Cost Breakdown</h2><p className="mb-3 text-sm text-slate-400">Fuel vs maintenance in the selected range.</p>{total <= 0 ? <div className="flex h-32 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">Add fuel or maintenance costs to see a cost breakdown.</div> : <div className="space-y-3"><div className="h-5 overflow-hidden rounded-full bg-slate-950 ring-1 ring-white/10"><div className="h-full bg-emerald-500" style={{ width: `${fuelPercent}%` }} /></div><div className="grid grid-cols-2 gap-3 text-sm"><div className="rounded-2xl bg-emerald-950/30 p-3 ring-1 ring-emerald-400/20"><div className="font-bold text-emerald-200">Fuel</div><div>{currency(fuel)}</div><div className="text-xs text-slate-400">{number(fuelPercent, 0)}%</div></div><div className="rounded-2xl bg-blue-950/30 p-3 ring-1 ring-blue-400/20"><div className="font-bold text-blue-200">Maintenance</div><div>{currency(maintenance)}</div><div className="text-xs text-slate-400">{number(maintenancePercent, 0)}%</div></div></div></div>}</div>
   );
 }
 
 function MaintenanceScheduleForm({ vehicle, onCancel, onSave }) {
   const [schedule, setSchedule] = useState(getMaintenanceSchedule(vehicle));
-
   function updateItem(id, field, value) {
-    setSchedule((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              [field]: field === "title" ? value : Number(value || 0),
-            }
-          : item
-      )
-    );
+    setSchedule((current) => current.map((item) => item.id === id ? { ...item, [field]: field === "title" ? value : Number(value || 0) } : item));
   }
-
-  function addItem() {
-    const newItem = {
-      id: makeServiceId("New Service"),
-      title: "New Service",
-      intervalMiles: 5000,
-      intervalMonths: 6,
-    };
-    setSchedule((current) => [...current, newItem]);
-  }
-
-  function deleteItem(id) {
-    setSchedule((current) => current.filter((item) => item.id !== id));
-  }
-
-  function resetToDefaults() {
-    if (!window.confirm("Reset this vehicle's maintenance schedule to the default reminders?")) return;
-    setSchedule(defaultMaintenanceSchedule);
-  }
-
-  function submit(event) {
-    event.preventDefault();
-    const cleaned = normalizeMaintenanceSchedule(schedule).filter((item) => item.title.trim());
-    onSave(cleaned.length ? cleaned : defaultMaintenanceSchedule);
-  }
-
+  function addItem() { setSchedule((current) => [...current, { id: makeServiceId("New Service"), title: "New Service", intervalMiles: 5000, intervalMonths: 6 }]); }
+  function deleteItem(id) { setSchedule((current) => current.filter((item) => item.id !== id)); }
+  function resetToDefaults() { if (!window.confirm("Reset this vehicle's maintenance schedule to the default reminders?")) return; setSchedule(defaultMaintenanceSchedule); }
+  function submit(event) { event.preventDefault(); const cleaned = normalizeMaintenanceSchedule(schedule).filter((item) => item.title.trim()); onSave(cleaned.length ? cleaned : defaultMaintenanceSchedule); }
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-      <div>
-        <h2 className="text-xl font-bold">Manage Maintenance Schedule</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Customize reminder intervals for this vehicle. Logged maintenance only clears a reminder when its “Satisfies Reminder” field matches one of these items.
-        </p>
-      </div>
-
-      <div className="space-y-3">
-        {schedule.map((item) => (
-          <div key={item.id} className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="font-semibold text-slate-200">Reminder Item</div>
-              <button
-                type="button"
-                onClick={() => deleteItem(item.id)}
-                className="rounded-xl bg-slate-800 p-2 text-slate-300"
-                aria-label="Delete schedule item"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-            <Field
-              label="Service Name"
-              value={item.title}
-              onChange={(value) => updateItem(item.id, "title", value)}
-              required
-            />
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <Field
-                label="Miles"
-                type="number"
-                value={item.intervalMiles}
-                onChange={(value) => updateItem(item.id, "intervalMiles", value)}
-                required
-              />
-              <Field
-                label="Months"
-                type="number"
-                value={item.intervalMonths}
-                onChange={(value) => updateItem(item.id, "intervalMonths", value)}
-                required
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={addItem}
-        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold"
-      >
-        <Plus size={18} /> Add Reminder Item
-      </button>
-
-      <button
-        type="button"
-        onClick={resetToDefaults}
-        className="w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300"
-      >
-        Reset to Defaults
-      </button>
-
-      <div className="grid grid-cols-2 gap-3 pt-2">
-        <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">
-          Cancel
-        </button>
-        <button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">
-          Save Schedule
-        </button>
-      </div>
+      <div><h2 className="text-xl font-bold">Manage Maintenance Schedule</h2><p className="mt-1 text-sm text-slate-400">Customize reminder intervals for this vehicle. Logged maintenance only clears a reminder when its “Satisfies Reminder” field matches one of these items.</p></div>
+      <div className="space-y-3">{schedule.map((item) => <div key={item.id} className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><div className="mb-3 flex items-center justify-between gap-3"><div className="font-semibold text-slate-200">Reminder Item</div><button type="button" onClick={() => deleteItem(item.id)} className="rounded-xl bg-slate-800 p-2 text-slate-300" aria-label="Delete schedule item"><Trash2 size={16} /></button></div><Field label="Service Name" value={item.title} onChange={(value) => updateItem(item.id, "title", value)} required /><div className="mt-3 grid grid-cols-2 gap-3"><Field label="Miles" type="number" value={item.intervalMiles} onChange={(value) => updateItem(item.id, "intervalMiles", value)} required /><Field label="Months" type="number" value={item.intervalMonths} onChange={(value) => updateItem(item.id, "intervalMonths", value)} required /></div></div>)}</div>
+      <button type="button" onClick={addItem} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold"><Plus size={18} /> Add Reminder Item</button>
+      <button type="button" onClick={resetToDefaults} className="w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300">Reset to Defaults</button>
+      <div className="grid grid-cols-2 gap-3 pt-2"><button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">Cancel</button><button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">Save Schedule</button></div>
     </form>
   );
 }
 
-function VehicleForm({ vehicle, onCancel, onSave }) {
-  const [form, setForm] = useState({
-    nickname: vehicle.nickname || "",
-    year: vehicle.year || "",
-    make: vehicle.make || "",
-    model: vehicle.model || "",
-    odometer: vehicle.odometer || "",
-    photo: vehicle.photo || "",
-  });
-
-  function update(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
-  }
-
+function VehicleForm({ vehicle, onCancel, onSave, onRequestDeleteVehicle }) {
+  const [form, setForm] = useState({ nickname: vehicle.nickname || "", year: vehicle.year || "", make: vehicle.make || "", model: vehicle.model || "", odometer: vehicle.odometer || "", photo: vehicle.photo || "" });
+  function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   function submit(event) {
     event.preventDefault();
-    onSave({
-      ...vehicle,
-      nickname: form.nickname.trim() || "Untitled Vehicle",
-      year: form.year.trim(),
-      make: form.make.trim(),
-      model: form.model.trim(),
-      odometer: Number(form.odometer || 0),
-      photo: form.photo,
-      maintenanceSchedule: getMaintenanceSchedule(vehicle),
-    });
+    onSave({ ...vehicle, nickname: form.nickname.trim() || "Untitled Vehicle", year: form.year.trim(), make: form.make.trim(), model: form.model.trim(), odometer: Number(form.odometer || 0), photo: form.photo, maintenanceSchedule: getMaintenanceSchedule(vehicle) });
   }
-
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
       <h2 className="text-xl font-bold">Edit Vehicle</h2>
@@ -1641,48 +1083,9 @@ function VehicleForm({ vehicle, onCancel, onSave }) {
       <Field label="Make" value={form.make} onChange={(value) => update("make", value)} />
       <Field label="Model" value={form.model} onChange={(value) => update("model", value)} />
       <Field label="Current Odometer" type="number" value={form.odometer} onChange={(value) => update("odometer", value)} required />
-
-      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10">
-        <span className="mb-2 block text-sm font-medium text-slate-300">Vehicle Banner Photo</span>
-        {form.photo ? (
-          <img src={form.photo} alt="Vehicle preview" className="mb-3 h-40 w-full rounded-2xl object-cover" />
-        ) : (
-          <div className="mb-3 flex h-40 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">
-            No vehicle photo yet
-          </div>
-        )}
-        <label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">
-          Choose Vehicle Photo
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              const compressed = await compressImageFile(file, 1600, 0.8);
-              update("photo", compressed);
-            }}
-          />
-        </label>
-        {form.photo && (
-          <button
-            type="button"
-            onClick={() => update("photo", "")}
-            className="mt-2 w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300"
-          >
-            Remove Photo
-          </button>
-        )}
-      </div>
-      <div className="grid grid-cols-2 gap-3 pt-2">
-        <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">
-          Cancel
-        </button>
-        <button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">
-          Save Vehicle
-        </button>
-      </div>
+      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><span className="mb-2 block text-sm font-medium text-slate-300">Vehicle Banner Photo</span>{form.photo ? <img src={form.photo} alt="Vehicle preview" className="mb-3 h-40 w-full rounded-2xl object-cover" /> : <div className="mb-3 flex h-40 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">No vehicle photo yet</div>}<label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">Choose Vehicle Photo<input type="file" accept="image/*" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; const compressed = await compressImageFile(file, 1600, 0.8); update("photo", compressed); }} /></label>{form.photo && <button type="button" onClick={() => update("photo", "")} className="mt-2 w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300">Remove Photo</button>}</div>
+      {onRequestDeleteVehicle && <button type="button" onClick={onRequestDeleteVehicle} className="w-full rounded-2xl bg-red-600 px-4 py-4 font-bold text-white shadow-lg shadow-red-950/30">Remove Vehicle</button>}
+      <div className="grid grid-cols-2 gap-3 pt-2"><button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">Cancel</button><button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">Save Vehicle</button></div>
     </form>
   );
 }
@@ -1690,214 +1093,34 @@ function VehicleForm({ vehicle, onCancel, onSave }) {
 function MaintenanceForm({ vehicle, initialEntry = null, onCancel, onSave }) {
   const schedule = getMaintenanceSchedule(vehicle);
   const isEditing = Boolean(initialEntry);
-  const [form, setForm] = useState({
-    maintenanceType: initialEntry?.maintenanceType || "Scheduled Maintenance",
-    serviceKey: initialEntry?.serviceKey || "",
-    title: initialEntry?.title || "",
-    date: initialEntry?.date || new Date().toISOString().slice(0, 10),
-    odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "",
-    cost: initialEntry?.cost ?? "",
-    serviceProvider: initialEntry?.serviceProvider || "",
-    status: initialEntry?.status || "Completed",
-    notes: initialEntry?.notes || "",
-    attachments: initialEntry?.attachments || [],
-  });
-
-  function update(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
-  }
-
-  async function addAttachments(files) {
-    const fileList = Array.from(files || []);
-    if (fileList.length === 0) return;
-    const compressedImages = await Promise.all(
-      fileList.map((file) => compressImageFile(file, 1400, 0.72))
-    );
-    update("attachments", [...form.attachments, ...compressedImages]);
-  }
-
-  function removeAttachment(indexToRemove) {
-    update(
-      "attachments",
-      form.attachments.filter((_, index) => index !== indexToRemove)
-    );
-  }
-
-  function submit(event) {
-    event.preventDefault();
-    const scheduleTitle = getScheduleItemTitle(form.serviceKey, vehicle);
-    const entry = {
-      id: initialEntry?.id || crypto.randomUUID(),
-      type: "maintenance",
-      maintenanceType: form.maintenanceType,
-      serviceKey: form.serviceKey,
-      title: form.title.trim() || scheduleTitle || "Maintenance",
-      date: form.date,
-      odometer: Number(form.odometer),
-      cost: Number(form.cost || 0),
-      serviceProvider: form.serviceProvider.trim(),
-      status: form.status,
-      notes: form.notes.trim(),
-      attachments: form.attachments,
-      createdAt: initialEntry?.createdAt || new Date().toISOString(),
-      updatedAt: isEditing ? new Date().toISOString() : undefined,
-    };
-    onSave(entry);
-  }
-
+  const [form, setForm] = useState({ maintenanceType: initialEntry?.maintenanceType || "Scheduled Maintenance", serviceKey: initialEntry?.serviceKey || "", title: initialEntry?.title || "", date: initialEntry?.date || new Date().toISOString().slice(0, 10), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", cost: initialEntry?.cost ?? "", serviceProvider: initialEntry?.serviceProvider || "", status: initialEntry?.status || "Completed", notes: initialEntry?.notes || "", attachments: initialEntry?.attachments || [] });
+  function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
+  async function addAttachments(files) { const fileList = Array.from(files || []); if (fileList.length === 0) return; const compressedImages = await Promise.all(fileList.map((file) => compressImageFile(file, 1400, 0.72))); update("attachments", [...form.attachments, ...compressedImages]); }
+  function removeAttachment(indexToRemove) { update("attachments", form.attachments.filter((_, index) => index !== indexToRemove)); }
+  function submit(event) { event.preventDefault(); const scheduleTitle = getScheduleItemTitle(form.serviceKey, vehicle); onSave({ id: initialEntry?.id || crypto.randomUUID(), type: "maintenance", maintenanceType: form.maintenanceType, serviceKey: form.serviceKey, title: form.title.trim() || scheduleTitle || "Maintenance", date: form.date, odometer: Number(form.odometer), cost: Number(form.cost || 0), serviceProvider: form.serviceProvider.trim(), status: form.status, notes: form.notes.trim(), attachments: form.attachments, createdAt: initialEntry?.createdAt || new Date().toISOString(), updatedAt: isEditing ? new Date().toISOString() : undefined }); }
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
       <h2 className="text-xl font-bold">{isEditing ? "Edit Maintenance Log" : "Log Maintenance"}</h2>
-
-      <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-300">Reason for Log</span>
-        <select
-          value={form.maintenanceType}
-          onChange={(event) => update("maintenanceType", event.target.value)}
-          className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-        >
-          <option>Scheduled Maintenance</option>
-          <option>Repair</option>
-          <option>Recall / TSB</option>
-          <option>Inspection</option>
-          <option>Tire Service</option>
-          <option>Modification / Upgrade</option>
-          <option>Diagnostic</option>
-          <option>Emergency Repair</option>
-          <option>Other</option>
-        </select>
-      </label>
-
-      <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-300">Satisfies Reminder</span>
-        <select
-          value={form.serviceKey}
-          onChange={(event) => update("serviceKey", event.target.value)}
-          className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-        >
-          <option value="">Does not satisfy a reminder</option>
-          {schedule.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.title}
-            </option>
-          ))}
-        </select>
-      </label>
-
+      <SelectField label="Reason for Log" value={form.maintenanceType} onChange={(value) => update("maintenanceType", value)} options={["Scheduled Maintenance", "Repair", "Recall / TSB", "Inspection", "Tire Service", "Modification / Upgrade", "Diagnostic", "Emergency Repair", "Other"]} />
+      <label className="block"><span className="mb-1 block text-sm font-medium text-slate-300">Satisfies Reminder</span><select value={form.serviceKey} onChange={(event) => update("serviceKey", event.target.value)} className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"><option value="">Does not satisfy a reminder</option>{schedule.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
       <Field label="Title / Short Description" value={form.title} onChange={(value) => update("title", value)} />
       <Field label="Date" type="date" value={form.date} onChange={(value) => update("date", value)} required />
       <Field label="Odometer" type="number" value={form.odometer} onChange={(value) => update("odometer", value)} required />
       <Field label="Cost" type="number" step="0.01" value={form.cost} onChange={(value) => update("cost", value)} />
       <Field label="Service Provider / Location" value={form.serviceProvider} onChange={(value) => update("serviceProvider", value)} />
-
-      <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-300">Status</span>
-        <select
-          value={form.status}
-          onChange={(event) => update("status", event.target.value)}
-          className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-        >
-          <option>Completed</option>
-          <option>Monitoring</option>
-          <option>Needs Repair</option>
-          <option>Scheduled</option>
-          <option>Deferred</option>
-        </select>
-      </label>
-
-      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10">
-        <span className="mb-2 block text-sm font-medium text-slate-300">Photos / Attachments</span>
-        {form.attachments.length > 0 ? (
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            {form.attachments.map((attachment, index) => (
-              <div key={index} className="relative">
-                <img src={attachment} alt={`Attachment ${index + 1}`} className="h-32 w-full rounded-2xl object-cover" />
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(index)}
-                  className="absolute right-2 top-2 rounded-xl bg-black/70 p-2 text-white"
-                  aria-label="Remove attachment"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="mb-3 flex h-32 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">
-            No attachments yet
-          </div>
-        )}
-        <label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">
-          Add Photos
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={async (event) => {
-              await addAttachments(event.target.files);
-              event.target.value = "";
-            }}
-          />
-        </label>
-      </div>
-
-      <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-300">Notes</span>
-        <textarea
-          value={form.notes}
-          onChange={(event) => update("notes", event.target.value)}
-          className="min-h-24 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-        />
-      </label>
-
-      <div className="grid grid-cols-2 gap-3 pt-2">
-        <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">
-          Cancel
-        </button>
-        <button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">
-          {isEditing ? "Save Changes" : "Save Maintenance"}
-        </button>
-      </div>
+      <SelectField label="Status" value={form.status} onChange={(value) => update("status", value)} options={["Completed", "Monitoring", "Needs Repair", "Scheduled", "Deferred"]} />
+      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><span className="mb-2 block text-sm font-medium text-slate-300">Photos / Attachments</span>{form.attachments.length > 0 ? <div className="mb-3 grid grid-cols-2 gap-2">{form.attachments.map((attachment, index) => <div key={index} className="relative"><img src={attachment} alt={`Attachment ${index + 1}`} className="h-32 w-full rounded-2xl object-cover" /><button type="button" onClick={() => removeAttachment(index)} className="absolute right-2 top-2 rounded-xl bg-black/70 p-2 text-white" aria-label="Remove attachment"><Trash2 size={14} /></button></div>)}</div> : <div className="mb-3 flex h-32 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">No attachments yet</div>}<label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">Add Photos<input type="file" accept="image/*" multiple className="hidden" onChange={async (event) => { await addAttachments(event.target.files); event.target.value = ""; }} /></label></div>
+      <TextAreaField label="Notes" value={form.notes} onChange={(value) => update("notes", value)} />
+      <div className="grid grid-cols-2 gap-3 pt-2"><button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">Cancel</button><button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">{isEditing ? "Save Changes" : "Save Maintenance"}</button></div>
     </form>
   );
 }
 
 function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
   const isEditing = Boolean(initialEntry);
-  const [form, setForm] = useState({
-    date: initialEntry?.date || new Date().toISOString().slice(0, 10),
-    odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "",
-    gallons: initialEntry?.gallons ?? "",
-    totalCost: initialEntry?.totalCost ?? "",
-    station: initialEntry?.station || "",
-    notes: initialEntry?.notes || "",
-    photo: initialEntry?.photo || "",
-  });
-
-  function update(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
-  }
-
-  function submit(event) {
-    event.preventDefault();
-    const entry = {
-      id: initialEntry?.id || crypto.randomUUID(),
-      type: "fuel",
-      date: form.date,
-      odometer: Number(form.odometer),
-      gallons: Number(form.gallons),
-      totalCost: Number(form.totalCost),
-      station: form.station.trim(),
-      notes: form.notes.trim(),
-      photo: form.photo,
-      createdAt: initialEntry?.createdAt || new Date().toISOString(),
-      updatedAt: isEditing ? new Date().toISOString() : undefined,
-    };
-    onSave(entry);
-  }
-
+  const [form, setForm] = useState({ date: initialEntry?.date || new Date().toISOString().slice(0, 10), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", gallons: initialEntry?.gallons ?? "", totalCost: initialEntry?.totalCost ?? "", station: initialEntry?.station || "", notes: initialEntry?.notes || "", photo: initialEntry?.photo || "" });
+  function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
+  function submit(event) { event.preventDefault(); onSave({ id: initialEntry?.id || crypto.randomUUID(), type: "fuel", date: form.date, odometer: Number(form.odometer), gallons: Number(form.gallons), totalCost: Number(form.totalCost), station: form.station.trim(), notes: form.notes.trim(), photo: form.photo, createdAt: initialEntry?.createdAt || new Date().toISOString(), updatedAt: isEditing ? new Date().toISOString() : undefined }); }
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
       <h2 className="text-xl font-bold">{isEditing ? "Edit Fuel Log" : "Log Fuel"}</h2>
@@ -1906,92 +1129,31 @@ function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
       <Field label="Gallons" type="number" step="0.001" value={form.gallons} onChange={(value) => update("gallons", value)} required />
       <Field label="Total Cost" type="number" step="0.01" value={form.totalCost} onChange={(value) => update("totalCost", value)} required />
       <Field label="Station" value={form.station} onChange={(value) => update("station", value)} />
-      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10">
-        <span className="mb-2 block text-sm font-medium text-slate-300">Pump or Receipt Photo</span>
-        {form.photo ? (
-          <img src={form.photo} alt="Fuel log preview" className="mb-3 h-44 w-full rounded-2xl object-cover" />
-        ) : (
-          <div className="mb-3 flex h-44 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">
-            No photo attached
-          </div>
-        )}
-        <label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">
-          Take or Choose Photo
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              const compressed = await compressImageFile(file, 1400, 0.72);
-              update("photo", compressed);
-            }}
-          />
-        </label>
-        {form.photo && (
-          <button
-            type="button"
-            onClick={() => update("photo", "")}
-            className="mt-2 w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300"
-          >
-            Remove Photo
-          </button>
-        )}
-      </div>
-      <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-300">Notes</span>
-        <textarea
-          value={form.notes}
-          onChange={(event) => update("notes", event.target.value)}
-          className="min-h-24 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-        />
-      </label>
-      <div className="grid grid-cols-2 gap-3 pt-2">
-        <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">
-          Cancel
-        </button>
-        <button type="submit" className="rounded-2xl bg-emerald-500 px-4 py-4 font-bold text-slate-950">
-          {isEditing ? "Save Changes" : "Save Fuel"}
-        </button>
-      </div>
+      <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><span className="mb-2 block text-sm font-medium text-slate-300">Pump or Receipt Photo</span>{form.photo ? <img src={form.photo} alt="Fuel log preview" className="mb-3 h-44 w-full rounded-2xl object-cover" /> : <div className="mb-3 flex h-44 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">No photo attached</div>}<label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">Take or Choose Photo<input type="file" accept="image/*" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; const compressed = await compressImageFile(file, 1400, 0.72); update("photo", compressed); }} /></label>{form.photo && <button type="button" onClick={() => update("photo", "")} className="mt-2 w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300">Remove Photo</button>}</div>
+      <TextAreaField label="Notes" value={form.notes} onChange={(value) => update("notes", value)} />
+      <div className="grid grid-cols-2 gap-3 pt-2"><button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">Cancel</button><button type="submit" className="rounded-2xl bg-emerald-500 px-4 py-4 font-bold text-slate-950">{isEditing ? "Save Changes" : "Save Fuel"}</button></div>
     </form>
   );
 }
 
+function SelectField({ label, value, onChange, options }) {
+  return <label className="block"><span className="mb-1 block text-sm font-medium text-slate-300">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400">{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+}
+
+function TextAreaField({ label, value, onChange }) {
+  return <label className="block"><span className="mb-1 block text-sm font-medium text-slate-300">{label}</span><textarea value={value} onChange={(event) => onChange(event.target.value)} className="min-h-24 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400" /></label>;
+}
+
 function Field({ label, value, onChange, type = "text", required = false, step }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-300">{label}</span>
-      <input
-        type={type}
-        step={step}
-        value={value}
-        required={required}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400"
-      />
-    </label>
-  );
+  return <label className="block"><span className="mb-1 block text-sm font-medium text-slate-300">{label}</span><input type={type} step={step} value={value} required={required} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-400" /></label>;
 }
 
 function StatPill({ label, value }) {
-  return (
-    <div className="rounded-2xl bg-slate-800 px-3 py-2">
-      <div className="font-semibold">{value}</div>
-      <div className="text-xs text-slate-400">{label}</div>
-    </div>
-  );
+  return <div className="rounded-2xl bg-slate-800 px-3 py-2"><div className="font-semibold">{value}</div><div className="text-xs text-slate-400">{label}</div></div>;
 }
 
 function DashboardStat({ icon, label, value }) {
-  return (
-    <div className="rounded-2xl bg-slate-800 p-3">
-      <div className="mb-2">{icon}</div>
-      <div className="text-lg font-bold">{value}</div>
-      <div className="text-xs text-slate-400">{label}</div>
-    </div>
-  );
+  return <div className="rounded-2xl bg-slate-800 p-3"><div className="mb-2">{icon}</div><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-400">{label}</div></div>;
 }
 
 export default App;

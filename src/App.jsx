@@ -57,7 +57,7 @@ const starterState = {
         {
           id: crypto.randomUUID(),
           type: "fuel",
-          date: new Date().toISOString().slice(0, 10),
+          date: todayLocalString(),
           odometer: 0,
           gallons: 0,
           totalCost: 0,
@@ -249,8 +249,19 @@ function addMonths(dateString, months) {
   return date;
 }
 
+function todayLocalString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function dateToString(date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function daysBetween(startDate, endDate) {
@@ -609,12 +620,12 @@ function App() {
   }
 
   function exportBackup() {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = todayLocalString();
     downloadJson(`vehicle-records-backup-${date}.json`, state);
   }
 
   function exportCsv() {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = todayLocalString();
     downloadCsv(`vehicle-records-export-${date}.csv`, buildCsvRows(state));
   }
 
@@ -1093,7 +1104,7 @@ function VehicleForm({ vehicle, onCancel, onSave, onRequestDeleteVehicle }) {
 function MaintenanceForm({ vehicle, initialEntry = null, onCancel, onSave }) {
   const schedule = getMaintenanceSchedule(vehicle);
   const isEditing = Boolean(initialEntry);
-  const [form, setForm] = useState({ maintenanceType: initialEntry?.maintenanceType || "Scheduled Maintenance", serviceKey: initialEntry?.serviceKey || "", title: initialEntry?.title || "", date: initialEntry?.date || new Date().toISOString().slice(0, 10), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", cost: initialEntry?.cost ?? "", serviceProvider: initialEntry?.serviceProvider || "", status: initialEntry?.status || "Completed", notes: initialEntry?.notes || "", attachments: initialEntry?.attachments || [] });
+  const [form, setForm] = useState({ maintenanceType: initialEntry?.maintenanceType || "Scheduled Maintenance", serviceKey: initialEntry?.serviceKey || "", title: initialEntry?.title || "", date: initialEntry?.date || todayLocalString(), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", cost: initialEntry?.cost ?? "", serviceProvider: initialEntry?.serviceProvider || "", status: initialEntry?.status || "Completed", notes: initialEntry?.notes || "", attachments: initialEntry?.attachments || [] });
   function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   async function addAttachments(files) { const fileList = Array.from(files || []); if (fileList.length === 0) return; const compressedImages = await Promise.all(fileList.map((file) => compressImageFile(file, 1400, 0.72))); update("attachments", [...form.attachments, ...compressedImages]); }
   function removeAttachment(indexToRemove) { update("attachments", form.attachments.filter((_, index) => index !== indexToRemove)); }
@@ -1118,7 +1129,7 @@ function MaintenanceForm({ vehicle, initialEntry = null, onCancel, onSave }) {
 
 function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
   const isEditing = Boolean(initialEntry);
-  const [form, setForm] = useState({ date: initialEntry?.date || new Date().toISOString().slice(0, 10), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", gallons: initialEntry?.gallons ?? "", totalCost: initialEntry?.totalCost ?? "", station: initialEntry?.station || "", notes: initialEntry?.notes || "", photo: initialEntry?.photo || "" });
+  const [form, setForm] = useState({ date: initialEntry?.date || todayLocalString(), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", gallons: initialEntry?.gallons ?? "", totalCost: initialEntry?.totalCost ?? "", station: initialEntry?.station || "", notes: initialEntry?.notes || "", photo: initialEntry?.photo || "" });
   function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   function submit(event) { event.preventDefault(); onSave({ id: initialEntry?.id || crypto.randomUUID(), type: "fuel", date: form.date, odometer: Number(form.odometer), gallons: Number(form.gallons), totalCost: Number(form.totalCost), station: form.station.trim(), notes: form.notes.trim(), photo: form.photo, createdAt: initialEntry?.createdAt || new Date().toISOString(), updatedAt: isEditing ? new Date().toISOString() : undefined }); }
   return (

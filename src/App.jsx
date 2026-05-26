@@ -150,6 +150,9 @@ function buildCsvRows(state) {
     "gallons",
     "fuel_total_cost",
     "mpg",
+    "vehicle_estimated_mpg",
+    "include_vehicle_estimated_mpg",
+    "vehicle_mpg_difference_percent",
     "miles_since_last_fillup",
     "station",
     "maintenance_type",
@@ -189,6 +192,18 @@ function buildCsvRows(state) {
         entry.type === "fuel" ? entry.gallons : "",
         entry.type === "fuel" ? entry.totalCost : "",
         entry.type === "fuel" && mpgByEntryId[entry.id] ? mpgByEntryId[entry.id].toFixed(2) : "",
+        entry.type === "fuel" ? entry.vehicleEstimatedMpg || "" : "",
+        entry.type === "fuel" ? Boolean(entry.includeVehicleEstimatedMpg) : "",
+        entry.type === "fuel" &&
+        entry.includeVehicleEstimatedMpg &&
+        entry.vehicleEstimatedMpg &&
+        mpgByEntryId[entry.id]
+          ? (
+              ((Number(entry.vehicleEstimatedMpg) - mpgByEntryId[entry.id]) /
+                mpgByEntryId[entry.id]) *
+              100
+            ).toFixed(2)
+          : "",
         entry.type === "fuel" && milesByEntryId[entry.id] ? milesByEntryId[entry.id] : "",
         entry.type === "fuel" ? entry.station : "",
         entry.type === "maintenance" ? entry.maintenanceType : "",
@@ -525,6 +540,29 @@ function buildMpgSeries(vehicle, rangeId) {
   return sortedFuelEntries
     .map((entry, index) => ({ id: entry.id, date: entry.date, value: calculateEntryMpg(sortedFuelEntries, index) }))
     .filter((point) => point.value !== null)
+    .filter((point) => !startDate || new Date(`${point.date}T00:00:00`) >= startDate);
+}
+
+function buildVehicleMpgDifferenceSeries(vehicle, rangeId) {
+  const sortedFuelEntries = getFuelEntriesSorted(vehicle);
+  const startDate = getRangeStartDate(rangeId);
+
+  return sortedFuelEntries
+    .map((entry, index) => {
+      const calculatedMpg = calculateEntryMpg(sortedFuelEntries, index);
+      const vehicleEstimatedMpg = Number(entry.vehicleEstimatedMpg || 0);
+
+      if (!entry.includeVehicleEstimatedMpg || !calculatedMpg || vehicleEstimatedMpg <= 0) {
+        return null;
+      }
+
+      return {
+        id: entry.id,
+        date: entry.date,
+        value: ((vehicleEstimatedMpg - calculatedMpg) / calculatedMpg) * 100,
+      };
+    })
+    .filter(Boolean)
     .filter((point) => !startDate || new Date(`${point.date}T00:00:00`) >= startDate);
 }
 
@@ -957,7 +995,33 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
                         <button onClick={() => onDeleteEntry(entry.id)} className="rounded-xl bg-slate-700 p-2 text-slate-300" aria-label="Delete entry"><Trash2 size={16} /></button>
                       </div>
                     </div>
-                    {entry.type === "fuel" && <div className="mt-2 text-sm text-slate-300">{milesByEntryId[entry.id] ? `${number(milesByEntryId[entry.id])} mi since last fill-up` : "Miles pending"} • {number(entry.gallons, 3)} gal • {currency(entry.totalCost)} • {mpgByEntryId[entry.id] ? `${number(mpgByEntryId[entry.id], 1)} MPG` : "MPG pending"}{entry.station ? ` • ${entry.station}` : ""}</div>}
+                    {entry.type === "fuel" && (
+                      <div className="mt-2 text-sm text-slate-300">
+                        {milesByEntryId[entry.id]
+                          ? `${number(milesByEntryId[entry.id])} mi since last fill-up`
+                          : "Miles pending"}{" "}
+                        • {number(entry.gallons, 3)} gal • {currency(entry.totalCost)} •{" "}
+                        {mpgByEntryId[entry.id]
+                          ? `${number(mpgByEntryId[entry.id], 1)} MPG`
+                          : "MPG pending"}
+                        {entry.includeVehicleEstimatedMpg &&
+                          entry.vehicleEstimatedMpg &&
+                          mpgByEntryId[entry.id] && (
+                            <>
+                              {" "}• Vehicle est: {number(entry.vehicleEstimatedMpg, 1)} MPG
+                              {" "}• Diff:{" "}
+                              {number(
+                                ((Number(entry.vehicleEstimatedMpg) - mpgByEntryId[entry.id]) /
+                                  mpgByEntryId[entry.id]) *
+                                  100,
+                                1
+                              )}
+                              %
+                            </>
+                          )}
+                        {entry.station ? ` • ${entry.station}` : ""}
+                      </div>
+                    )}
                     {entry.type === "maintenance" && <div className="mt-2 text-sm text-slate-300"><div className="font-semibold">{entry.title || "Maintenance"}</div><div>{entry.maintenanceType} • {entry.status} • {currency(entry.cost)}</div>{entry.serviceKey && <div className="text-slate-400">Satisfies: {getScheduleItemTitle(entry.serviceKey, vehicle)}</div>}{entry.serviceProvider && <div className="text-slate-400">{entry.serviceProvider}</div>}</div>}
                     {entry.photo && <img src={entry.photo} alt="Fuel log attachment" className="mt-3 h-36 w-full rounded-2xl object-cover ring-1 ring-white/10" />}
                     {entry.attachments?.length > 0 && <div className="mt-3 grid grid-cols-2 gap-2">{entry.attachments.map((attachment, index) => <img key={index} src={attachment} alt={`Maintenance attachment ${index + 1}`} className="h-28 w-full rounded-2xl object-cover ring-1 ring-white/10" />)}</div>}
@@ -979,6 +1043,7 @@ function StatsScreen({ vehicle }) {
   const mpgSeries = buildMpgSeries(vehicle, range);
   const monthlyFuelSeries = buildMonthlyFuelSeries(vehicle, range);
   const milesSeries = buildMilesOverTimeSeries(vehicle, range);
+  const vehicleMpgDifferenceSeries = buildVehicleMpgDifferenceSeries(vehicle, range);
 
   return (
     <div className="space-y-4">
@@ -986,6 +1051,9 @@ function StatsScreen({ vehicle }) {
       <div className="grid grid-cols-2 gap-3"><DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} /><DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} /><DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} /><DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} /></div>
       <div className="grid grid-cols-2 gap-3"><StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} /><StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} /></div>
       <ChartCard title="MPG Over Time" subtitle="Calculated from fuel entries after the first fill-up."><MiniLineChart data={mpgSeries} valueLabel="MPG" yAxisLabel="MPG" xAxisLabel="Fuel entries" digits={1} emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG." /></ChartCard>
+      <ChartCard title="Vehicle MPG Estimate Difference" subtitle="Positive means the vehicle estimate was higher than the calculated MPG.">
+        <MiniLineChart data={vehicleMpgDifferenceSeries} valueLabel="%" yAxisLabel="% difference" xAxisLabel="Fuel entries" digits={1} emptyMessage="Add fuel logs with included vehicle MPG estimates to see this comparison."/>
+      </ChartCard>
       <ChartCard title="Monthly Fuel Spending" subtitle="Fuel spending grouped by month in the selected range."><MiniLineChart data={monthlyFuelSeries} valueLabel="Fuel" yAxisLabel="Dollars" xAxisLabel="Month" formatValue={currency} emptyMessage="Add fuel logs to see monthly spending." /></ChartCard>
       <ChartCard title="Miles Over Time" subtitle="Odometer readings from fuel and maintenance entries."><MiniLineChart data={milesSeries} valueLabel="mi" yAxisLabel="Odometer" xAxisLabel="Date" digits={0} emptyMessage="Add entries with odometer readings to see miles over time." /></ChartCard>
       <CalculationNotes />
@@ -1129,9 +1197,42 @@ function MaintenanceForm({ vehicle, initialEntry = null, onCancel, onSave }) {
 
 function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
   const isEditing = Boolean(initialEntry);
-  const [form, setForm] = useState({ date: initialEntry?.date || todayLocalString(), odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "", gallons: initialEntry?.gallons ?? "", totalCost: initialEntry?.totalCost ?? "", station: initialEntry?.station || "", notes: initialEntry?.notes || "", photo: initialEntry?.photo || "" });
+  const [form, setForm] = useState({
+    date: initialEntry?.date || todayLocalString(),
+    odometer: initialEntry?.odometer ?? getCurrentOdometer(vehicle) ?? "",
+    gallons: initialEntry?.gallons ?? "",
+    totalCost: initialEntry?.totalCost ?? "",
+    vehicleEstimatedMpg: initialEntry?.vehicleEstimatedMpg ?? "",
+    includeVehicleEstimatedMpg: initialEntry?.includeVehicleEstimatedMpg ?? false,
+    station: initialEntry?.station || "",
+    notes: initialEntry?.notes || "",
+    photo: initialEntry?.photo || "",
+  });
   function update(field, value) { setForm((current) => ({ ...current, [field]: value })); }
-  function submit(event) { event.preventDefault(); onSave({ id: initialEntry?.id || crypto.randomUUID(), type: "fuel", date: form.date, odometer: Number(form.odometer), gallons: Number(form.gallons), totalCost: Number(form.totalCost), station: form.station.trim(), notes: form.notes.trim(), photo: form.photo, createdAt: initialEntry?.createdAt || new Date().toISOString(), updatedAt: isEditing ? new Date().toISOString() : undefined }); }
+  function submit(event) {
+    event.preventDefault();
+
+    onSave({
+      id: initialEntry?.id || crypto.randomUUID(),
+      type: "fuel",
+      date: form.date,
+      odometer: Number(form.odometer),
+      gallons: Number(form.gallons),
+      totalCost: Number(form.totalCost),
+
+      vehicleEstimatedMpg: form.includeVehicleEstimatedMpg
+        ? Number(form.vehicleEstimatedMpg || 0)
+        : "",
+
+      includeVehicleEstimatedMpg: Boolean(form.includeVehicleEstimatedMpg),
+
+      station: form.station.trim(),
+      notes: form.notes.trim(),
+      photo: form.photo,
+      createdAt: initialEntry?.createdAt || new Date().toISOString(),
+      updatedAt: isEditing ? new Date().toISOString() : undefined
+    });
+  }
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
       <h2 className="text-xl font-bold">{isEditing ? "Edit Fuel Log" : "Log Fuel"}</h2>
@@ -1139,6 +1240,34 @@ function FuelForm({ vehicle, initialEntry = null, onCancel, onSave }) {
       <Field label="Odometer" type="number" value={form.odometer} onChange={(value) => update("odometer", value)} required />
       <Field label="Gallons" type="number" step="0.001" value={form.gallons} onChange={(value) => update("gallons", value)} required />
       <Field label="Total Cost" type="number" step="0.01" value={form.totalCost} onChange={(value) => update("totalCost", value)} required />
+      <Field
+        label="Vehicle Estimated MPG"
+        type="number"
+        step="0.1"
+        value={form.vehicleEstimatedMpg}
+        onChange={(value) => update("vehicleEstimatedMpg", value)}
+      />
+
+      <label className="flex items-start gap-3 rounded-2xl bg-slate-950 p-3 text-sm text-slate-300 ring-1 ring-white/10">
+        <input
+          type="checkbox"
+          checked={form.includeVehicleEstimatedMpg}
+          onChange={(event) =>
+            update("includeVehicleEstimatedMpg", event.target.checked)
+          }
+          className="mt-1"
+        />
+
+        <span>
+          <span className="block font-semibold text-slate-100">
+            Include vehicle MPG estimate in comparison charts
+          </span>
+
+          <span className="text-slate-400">
+            Only check this if you reset the vehicle’s trip MPG at the last fill-up.
+          </span>
+        </span>
+      </label>
       <Field label="Station" value={form.station} onChange={(value) => update("station", value)} />
       <div className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><span className="mb-2 block text-sm font-medium text-slate-300">Pump or Receipt Photo</span>{form.photo ? <img src={form.photo} alt="Fuel log preview" className="mb-3 h-44 w-full rounded-2xl object-cover" /> : <div className="mb-3 flex h-44 items-center justify-center rounded-2xl bg-slate-800 text-slate-400">No photo attached</div>}<label className="block cursor-pointer rounded-2xl bg-slate-800 px-4 py-3 text-center font-semibold">Take or Choose Photo<input type="file" accept="image/*" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; const compressed = await compressImageFile(file, 1400, 0.72); update("photo", compressed); }} /></label>{form.photo && <button type="button" onClick={() => update("photo", "")} className="mt-2 w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300">Remove Photo</button>}</div>
       <TextAreaField label="Notes" value={form.notes} onChange={(value) => update("notes", value)} />

@@ -21,15 +21,15 @@ const DB_VERSION = 1;
 const STORE_NAME = "app-state";
 const STATE_KEY = "vehicle-records-state";
 
-const SOON_MILES_THRESHOLD = 500;
-const SOON_DAYS_THRESHOLD = 30;
+const DEFAULT_SOON_MILES = 500;
+const DEFAULT_SOON_MONTHS = 1;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 const defaultMaintenanceSchedule = [
-  { id: "oil-change", title: "Oil Change", intervalMiles: 5000, intervalMonths: 6 },
-  { id: "tire-rotation", title: "Tire Rotation", intervalMiles: 5000, intervalMonths: 6 },
-  { id: "engine-air-filter", title: "Engine Air Filter", intervalMiles: 30000, intervalMonths: 36 },
-  { id: "cabin-air-filter", title: "Cabin Air Filter", intervalMiles: 15000, intervalMonths: 12 },
+  { id: "oil-change", title: "Oil Change", intervalMiles: 5000, intervalMonths: 6, soonMiles: 500, soonMonths: 1 },
+  { id: "tire-rotation", title: "Tire Rotation", intervalMiles: 5000, intervalMonths: 6, soonMiles: 500, soonMonths: 1 },
+  { id: "engine-air-filter", title: "Engine Air Filter", intervalMiles: 30000, intervalMonths: 36, soonMiles: 1000, soonMonths: 2 },
+  { id: "cabin-air-filter", title: "Cabin Air Filter", intervalMiles: 15000, intervalMonths: 12, soonMiles: 1000, soonMonths: 1 },
 ];
 
 const rangeOptions = [
@@ -306,6 +306,8 @@ function normalizeMaintenanceSchedule(schedule) {
     title: item.title || "Untitled Service",
     intervalMiles: Number(item.intervalMiles || 0),
     intervalMonths: Number(item.intervalMonths || 0),
+    soonMiles: Number(item.soonMiles ?? DEFAULT_SOON_MILES),
+    soonMonths: Number(item.soonMonths ?? DEFAULT_SOON_MONTHS),
   }));
 }
 
@@ -392,7 +394,9 @@ function calculateMaintenanceReminders(vehicle) {
     const isMileageOverdue = milesRemaining < 0;
     const isDateOverdue = daysUntilDue < 0;
     const isDueNow = milesRemaining <= 0 || daysUntilDue <= 0;
-    const isSoon = milesRemaining <= SOON_MILES_THRESHOLD || daysUntilDue <= SOON_DAYS_THRESHOLD;
+    const soonMiles = Number(scheduleItem.soonMiles ?? DEFAULT_SOON_MILES);
+    const soonDays = Number(scheduleItem.soonMonths ?? DEFAULT_SOON_MONTHS) * 30;
+    const isSoon = milesRemaining <= soonMiles || daysUntilDue <= soonDays;
 
     if (isMileageOverdue || isDateOverdue) {
       const overdueMiles = Math.max(0, Math.abs(milesRemaining));
@@ -1129,20 +1133,138 @@ function CostBreakdownCard({ fuel, maintenance }) {
 
 function MaintenanceScheduleForm({ vehicle, onCancel, onSave }) {
   const [schedule, setSchedule] = useState(getMaintenanceSchedule(vehicle));
+
   function updateItem(id, field, value) {
-    setSchedule((current) => current.map((item) => item.id === id ? { ...item, [field]: field === "title" ? value : Number(value || 0) } : item));
+    setSchedule((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              [field]: field === "title" ? value : Number(value || 0),
+            }
+          : item
+      )
+    );
   }
-  function addItem() { setSchedule((current) => [...current, { id: makeServiceId("New Service"), title: "New Service", intervalMiles: 5000, intervalMonths: 6 }]); }
-  function deleteItem(id) { setSchedule((current) => current.filter((item) => item.id !== id)); }
-  function resetToDefaults() { if (!window.confirm("Reset this vehicle's maintenance schedule to the default reminders?")) return; setSchedule(defaultMaintenanceSchedule); }
-  function submit(event) { event.preventDefault(); const cleaned = normalizeMaintenanceSchedule(schedule).filter((item) => item.title.trim()); onSave(cleaned.length ? cleaned : defaultMaintenanceSchedule); }
+
+  function addItem() {
+    setSchedule((current) => [
+      ...current,
+      {
+        id: makeServiceId("New Service"),
+        title: "New Service",
+        intervalMiles: 5000,
+        intervalMonths: 6,
+        soonMiles: DEFAULT_SOON_MILES,
+        soonMonths: DEFAULT_SOON_MONTHS,
+      },
+    ]);
+  }
+
+  function deleteItem(id) {
+    setSchedule((current) => current.filter((item) => item.id !== id));
+  }
+
+  function resetToDefaults() {
+    if (!window.confirm("Reset this vehicle's maintenance schedule to the default reminders?")) return;
+    setSchedule(defaultMaintenanceSchedule);
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const cleaned = normalizeMaintenanceSchedule(schedule).filter((item) => item.title.trim());
+    onSave(cleaned.length ? cleaned : defaultMaintenanceSchedule);
+  }
+
   return (
     <form onSubmit={submit} className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-      <div><h2 className="text-xl font-bold">Manage Maintenance Schedule</h2><p className="mt-1 text-sm text-slate-400">Customize reminder intervals for this vehicle. Logged maintenance only clears a reminder when its “Satisfies Reminder” field matches one of these items.</p></div>
-      <div className="space-y-3">{schedule.map((item) => <div key={item.id} className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10"><div className="mb-3 flex items-center justify-between gap-3"><div className="font-semibold text-slate-200">Reminder Item</div><button type="button" onClick={() => deleteItem(item.id)} className="rounded-xl bg-slate-800 p-2 text-slate-300" aria-label="Delete schedule item"><Trash2 size={16} /></button></div><Field label="Service Name" value={item.title} onChange={(value) => updateItem(item.id, "title", value)} required /><div className="mt-3 grid grid-cols-2 gap-3"><Field label="Miles" type="number" value={item.intervalMiles} onChange={(value) => updateItem(item.id, "intervalMiles", value)} required /><Field label="Months" type="number" value={item.intervalMonths} onChange={(value) => updateItem(item.id, "intervalMonths", value)} required /></div></div>)}</div>
-      <button type="button" onClick={addItem} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold"><Plus size={18} /> Add Reminder Item</button>
-      <button type="button" onClick={resetToDefaults} className="w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300">Reset to Defaults</button>
-      <div className="grid grid-cols-2 gap-3 pt-2"><button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">Cancel</button><button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">Save Schedule</button></div>
+      <div>
+        <h2 className="text-xl font-bold">Manage Maintenance Schedule</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Customize reminder intervals and yellow “soon” warning thresholds for this vehicle.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {schedule.map((item) => (
+          <div key={item.id} className="rounded-3xl bg-slate-950 p-3 ring-1 ring-white/10">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="font-semibold text-slate-200">Reminder Item</div>
+              <button
+                type="button"
+                onClick={() => deleteItem(item.id)}
+                className="rounded-xl bg-slate-800 p-2 text-slate-300"
+                aria-label="Delete schedule item"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+
+            <Field
+              label="Service Name"
+              value={item.title}
+              onChange={(value) => updateItem(item.id, "title", value)}
+              required
+            />
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Field
+                label="Interval Miles"
+                type="number"
+                value={item.intervalMiles}
+                onChange={(value) => updateItem(item.id, "intervalMiles", value)}
+                required
+              />
+              <Field
+                label="Interval Months"
+                type="number"
+                value={item.intervalMonths}
+                onChange={(value) => updateItem(item.id, "intervalMonths", value)}
+                required
+              />
+              <Field
+                label="Soon Warning Miles"
+                type="number"
+                value={item.soonMiles}
+                onChange={(value) => updateItem(item.id, "soonMiles", value)}
+                required
+              />
+              <Field
+                label="Soon Warning Months"
+                type="number"
+                value={item.soonMonths}
+                onChange={(value) => updateItem(item.id, "soonMonths", value)}
+                required
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={addItem}
+        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold"
+      >
+        <Plus size={18} /> Add Reminder Item
+      </button>
+
+      <button
+        type="button"
+        onClick={resetToDefaults}
+        className="w-full rounded-2xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-300"
+      >
+        Reset to Defaults
+      </button>
+
+      <div className="grid grid-cols-2 gap-3 pt-2">
+        <button type="button" onClick={onCancel} className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold">
+          Cancel
+        </button>
+        <button type="submit" className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950">
+          Save Schedule
+        </button>
+      </div>
     </form>
   );
 }

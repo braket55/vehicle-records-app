@@ -922,20 +922,87 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
   );
 }
 
+function getMaintenanceUsage(reminder, currentOdometer) {
+  if (!reminder.lastLog) return null;
+
+  const milesSinceLast = Math.max(
+    0,
+    Number(currentOdometer || 0) - Number(reminder.lastLog.odometer || 0)
+  );
+
+  const daysSinceLast = Math.max(
+    0,
+    daysBetween(new Date(`${reminder.lastLog.date}T00:00:00`), new Date())
+  );
+
+  const mileageUsage =
+    Number(reminder.intervalMiles || 0) > 0
+      ? milesSinceLast / Number(reminder.intervalMiles)
+      : 0;
+
+  const timeUsage =
+    Number(reminder.intervalMonths || 0) > 0
+      ? daysSinceLast / (Number(reminder.intervalMonths) * 30)
+      : 0;
+
+  return Math.max(mileageUsage, timeUsage) * 100;
+}
+
+function getMaintenanceProgressClasses(reminder, usagePercent) {
+  if (reminder.status === "overdue" || reminder.status === "due" || usagePercent >= 100) {
+    return {
+      bar: "bg-red-500",
+      text: "text-red-200",
+      ring: "ring-red-400/30",
+    };
+  }
+
+  if (reminder.status === "soon" || usagePercent >= 80) {
+    return {
+      bar: "bg-amber-400",
+      text: "text-amber-100",
+      ring: "ring-amber-300/30",
+    };
+  }
+
+  return {
+    bar: "bg-emerald-500",
+    text: "text-emerald-200",
+    ring: "ring-emerald-400/20",
+  };
+}
+
+
 function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onViewStats, onEditVehicle, onEditEntry, onDeleteEntry }) {
-  const [historyExpanded, setHistoryExpanded] = useState(false);
   const stats = calculateFuelStats(vehicle);
   const currentOdometer = getCurrentOdometer(vehicle);
   const reminders = calculateMaintenanceReminders(vehicle);
-  const activeReminders = reminders.filter((reminder) => reminder.status !== "ok");
+  const shouldOpenMaintenanceStatus = reminders.some((reminder) =>
+    ["soon", "due", "overdue"].includes(reminder.status)
+  );
+
+  const [maintenanceExpanded, setMaintenanceExpanded] = useState(shouldOpenMaintenanceStatus);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  useEffect(() => {
+    setMaintenanceExpanded(shouldOpenMaintenanceStatus);
+  }, [vehicle.id, shouldOpenMaintenanceStatus]);
+
   const sortedFuelEntries = getFuelEntriesSorted(vehicle);
-  const mpgByEntryId = Object.fromEntries(sortedFuelEntries.map((entry, index) => [entry.id, calculateEntryMpg(sortedFuelEntries, index)]));
-  const milesByEntryId = Object.fromEntries(sortedFuelEntries.map((entry, index) => {
-    if (index === 0) return [entry.id, null];
-    const previousEntry = sortedFuelEntries[index - 1];
-    const milesDriven = Number(entry.odometer) - Number(previousEntry.odometer);
-    return [entry.id, milesDriven > 0 ? milesDriven : null];
-  }));
+
+  const mpgByEntryId = Object.fromEntries(
+    sortedFuelEntries.map((entry, index) => [entry.id, calculateEntryMpg(sortedFuelEntries, index)])
+  );
+
+  const milesByEntryId = Object.fromEntries(
+    sortedFuelEntries.map((entry, index) => {
+      if (index === 0) return [entry.id, null];
+      const previousEntry = sortedFuelEntries[index - 1];
+      const milesDriven = Number(entry.odometer) - Number(previousEntry.odometer);
+      return [entry.id, milesDriven > 0 ? milesDriven : null];
+    })
+  );
+
   const sortedEntries = [...vehicle.entries].sort((a, b) => new Date(b.date) - new Date(a.date));
 
   return (
@@ -944,12 +1011,25 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
         <div className="flex h-40 items-center justify-center bg-gradient-to-br from-cyan-400/30 via-sky-500/20 to-indigo-500/20">
           {vehicle.photo ? <img src={vehicle.photo} alt="" className="h-full w-full object-cover" /> : <Car size={76} className="text-white/70" />}
         </div>
+
         <div className="p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
-            <div><div className="text-2xl font-black tracking-tight">{vehicle.nickname}</div><div className="text-sm text-slate-400">{[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}</div></div>
-            <button onClick={onEditVehicle} className="rounded-2xl bg-white/10 p-3 text-slate-200 backdrop-blur-xl" aria-label="Edit vehicle"><Pencil size={18} /></button>
+            <div>
+              <div className="text-2xl font-black tracking-tight">{vehicle.nickname}</div>
+              <div className="text-sm text-slate-400">
+                {[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle details not set"}
+              </div>
+            </div>
+            <button onClick={onEditVehicle} className="rounded-2xl bg-white/10 p-3 text-slate-200 backdrop-blur-xl" aria-label="Edit vehicle">
+              <Pencil size={18} />
+            </button>
           </div>
-          <div className="mb-4 rounded-2xl bg-black/20 px-3 py-2 text-right backdrop-blur-xl"><div className="text-lg font-bold">{number(currentOdometer)} mi</div><div className="text-xs text-slate-400">current odometer</div></div>
+
+          <div className="mb-4 rounded-2xl bg-black/20 px-3 py-2 text-right backdrop-blur-xl">
+            <div className="text-lg font-bold">{number(currentOdometer)} mi</div>
+            <div className="text-xs text-slate-400">current odometer</div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Entries" value={vehicle.entries.length} />
             <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Avg MPG" value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"} />
@@ -960,32 +1040,38 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
       </div>
 
       <div className="grid gap-3">
-        <button onClick={onLogFuel} className="flex items-center justify-center gap-3 rounded-3xl bg-emerald-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-950/40"><Fuel size={24} /> Log Fuel</button>
-        <button onClick={onLogMaintenance} className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40"><Wrench size={24} /> Log Maintenance</button>
-        <button onClick={onViewStats} className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30"><BarChart3 size={22} /> Stats & Analytics</button>
-        <button onClick={onManageSchedule} className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20"><ClipboardList size={22} /> Manage Maintenance Schedule</button>
+        <button onClick={onLogFuel} className="flex items-center justify-center gap-3 rounded-3xl bg-emerald-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-lg shadow-emerald-950/40">
+          <Fuel size={24} /> Log Fuel
+        </button>
+        <button onClick={onLogMaintenance} className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40">
+          <Wrench size={24} /> Log Maintenance
+        </button>
+        <button onClick={onViewStats} className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30">
+          <BarChart3 size={22} /> Stats & Analytics
+        </button>
+        <button onClick={onManageSchedule} className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20">
+          <ClipboardList size={22} /> Manage Maintenance Schedule
+        </button>
       </div>
 
-      {activeReminders.length > 0 && (
-        <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
-          <h2 className="mb-3 flex items-center gap-2 text-lg font-bold"><AlertTriangle size={20} className="text-amber-300" /> Maintenance Reminders</h2>
-          <div className="space-y-3">
-            {activeReminders.map((reminder) => (
-              <div key={reminder.id} className={`rounded-2xl border p-3 ${reminder.cardClass}`}>
-                <div className="flex items-start justify-between gap-3"><div><div className="font-bold">{reminder.title}</div><div className="text-sm text-slate-300">{reminder.message}</div></div><span className={`rounded-full px-2 py-1 text-xs font-bold ring-1 ${reminder.badgeClass}`}>{reminder.status === "no-record" ? "No record" : reminder.status}</span></div>
-                {reminder.lastLog && <div className="mt-2 text-xs text-slate-400">Last done: {reminder.lastLog.date} • {number(reminder.lastLog.odometer)} mi</div>}
-                {reminder.nextDueMileage && reminder.dueDate && <div className="mt-1 text-xs text-slate-400">Next due: {number(reminder.nextDueMileage)} mi • {reminder.dueDate}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <MaintenanceStatusSection
+        reminders={reminders}
+        currentOdometer={currentOdometer}
+        expanded={maintenanceExpanded}
+        onToggle={() => setMaintenanceExpanded((current) => !current)}
+      />
 
       <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
         <button type="button" onClick={() => setHistoryExpanded((current) => !current)} className="flex w-full items-center justify-between">
-          <div><h2 className="text-left text-lg font-bold">Recent History</h2><p className="text-left text-sm text-slate-400">{sortedEntries.length} entries</p></div>
-          <motion.div animate={{ rotate: historyExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}><ChevronDown size={22} className="text-slate-300" /></motion.div>
+          <div>
+            <h2 className="text-left text-lg font-bold">Recent History</h2>
+            <p className="text-left text-sm text-slate-400">{sortedEntries.length} entries</p>
+          </div>
+          <motion.div animate={{ rotate: historyExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+            <ChevronDown size={22} className="text-slate-300" />
+          </motion.div>
         </button>
+
         {historyExpanded && (
           <div className="mt-4">
             {sortedEntries.length === 0 ? <p className="text-sm text-slate-400">No entries yet.</p> : (
@@ -993,40 +1079,40 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
                 {sortedEntries.map((entry) => (
                   <div key={entry.id} className={`rounded-2xl p-3 border shadow-lg ${entry.type === "fuel" ? "bg-gradient-to-br from-emerald-950/40 to-slate-800 border-emerald-500/20 shadow-emerald-950/20" : entry.type === "maintenance" ? "bg-gradient-to-br from-blue-950/50 via-indigo-950/30 to-slate-800 border-blue-500/30 shadow-blue-950/30" : "bg-slate-800 border-white/5"}`}>
                     <div className="flex items-start justify-between gap-3">
-                      <div><div className="font-semibold capitalize">{entry.type}</div><div className="text-sm text-slate-400">{entry.date} • {number(entry.odometer)} mi</div></div>
+                      <div>
+                        <div className="font-semibold capitalize">{entry.type}</div>
+                        <div className="text-sm text-slate-400">{entry.date} • {number(entry.odometer)} mi</div>
+                      </div>
                       <div className="flex gap-2">
                         {(entry.type === "fuel" || entry.type === "maintenance") && <button onClick={() => onEditEntry(entry.id)} className="rounded-xl bg-slate-700 p-2 text-slate-300" aria-label="Edit entry"><Pencil size={16} /></button>}
                         <button onClick={() => onDeleteEntry(entry.id)} className="rounded-xl bg-slate-700 p-2 text-slate-300" aria-label="Delete entry"><Trash2 size={16} /></button>
                       </div>
                     </div>
+
                     {entry.type === "fuel" && (
                       <div className="mt-2 text-sm text-slate-300">
-                        {milesByEntryId[entry.id]
-                          ? `${number(milesByEntryId[entry.id])} mi since last fill-up`
-                          : "Miles pending"}{" "}
+                        {milesByEntryId[entry.id] ? `${number(milesByEntryId[entry.id])} mi since last fill-up` : "Miles pending"}{" "}
                         • {number(entry.gallons, 3)} gal • {currency(entry.totalCost)} •{" "}
-                        {mpgByEntryId[entry.id]
-                          ? `${number(mpgByEntryId[entry.id], 1)} MPG`
-                          : "MPG pending"}
-                        {entry.includeVehicleEstimatedMpg &&
-                          entry.vehicleEstimatedMpg &&
-                          mpgByEntryId[entry.id] && (
-                            <>
-                              {" "}• Vehicle est: {number(entry.vehicleEstimatedMpg, 1)} MPG
-                              {" "}• Diff:{" "}
-                              {number(
-                                ((Number(entry.vehicleEstimatedMpg) - mpgByEntryId[entry.id]) /
-                                  mpgByEntryId[entry.id]) *
-                                  100,
-                                1
-                              )}
-                              %
-                            </>
-                          )}
+                        {mpgByEntryId[entry.id] ? `${number(mpgByEntryId[entry.id], 1)} MPG` : "MPG pending"}
+                        {entry.includeVehicleEstimatedMpg && entry.vehicleEstimatedMpg && mpgByEntryId[entry.id] && (
+                          <>
+                            {" "}• Vehicle est: {number(entry.vehicleEstimatedMpg, 1)} MPG
+                            {" "}• Diff: {number(((Number(entry.vehicleEstimatedMpg) - mpgByEntryId[entry.id]) / mpgByEntryId[entry.id]) * 100, 1)}%
+                          </>
+                        )}
                         {entry.station ? ` • ${entry.station}` : ""}
                       </div>
                     )}
-                    {entry.type === "maintenance" && <div className="mt-2 text-sm text-slate-300"><div className="font-semibold">{entry.title || "Maintenance"}</div><div>{entry.maintenanceType} • {entry.status} • {currency(entry.cost)}</div>{entry.serviceKey && <div className="text-slate-400">Satisfies: {getScheduleItemTitle(entry.serviceKey, vehicle)}</div>}{entry.serviceProvider && <div className="text-slate-400">{entry.serviceProvider}</div>}</div>}
+
+                    {entry.type === "maintenance" && (
+                      <div className="mt-2 text-sm text-slate-300">
+                        <div className="font-semibold">{entry.title || "Maintenance"}</div>
+                        <div>{entry.maintenanceType} • {entry.status} • {currency(entry.cost)}</div>
+                        {entry.serviceKey && <div className="text-slate-400">Satisfies: {getScheduleItemTitle(entry.serviceKey, vehicle)}</div>}
+                        {entry.serviceProvider && <div className="text-slate-400">{entry.serviceProvider}</div>}
+                      </div>
+                    )}
+
                     {entry.photo && <img src={entry.photo} alt="Fuel log attachment" className="mt-3 h-36 w-full rounded-2xl object-cover ring-1 ring-white/10" />}
                     {entry.attachments?.length > 0 && <div className="mt-3 grid grid-cols-2 gap-2">{entry.attachments.map((attachment, index) => <img key={index} src={attachment} alt={`Maintenance attachment ${index + 1}`} className="h-28 w-full rounded-2xl object-cover ring-1 ring-white/10" />)}</div>}
                     {entry.notes && <p className="mt-2 text-sm text-slate-400">{entry.notes}</p>}
@@ -1040,6 +1126,98 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
     </div>
   );
 }
+
+
+function MaintenanceStatusSection({ reminders, currentOdometer, expanded, onToggle }) {
+  const alertCount = reminders.filter((reminder) =>
+    ["soon", "due", "overdue"].includes(reminder.status)
+  ).length;
+
+  return (
+    <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between">
+        <div>
+          <h2 className="text-left text-lg font-bold">Maintenance Status</h2>
+          <p className="text-left text-sm text-slate-400">
+            {alertCount > 0 ? `${alertCount} item${alertCount === 1 ? "" : "s"} need attention` : "All reminders are within range"}
+          </p>
+        </div>
+
+        <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+          <ChevronDown size={22} className="text-slate-300" />
+        </motion.div>
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          {reminders.map((reminder) => (
+            <MaintenanceStatusCard
+              key={reminder.id}
+              reminder={reminder}
+              currentOdometer={currentOdometer}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MaintenanceStatusCard({ reminder, currentOdometer }) {
+  const usagePercent = getMaintenanceUsage(reminder, currentOdometer);
+  const displayedUsage = usagePercent === null ? 0 : Math.min(usagePercent, 125);
+  const classes = getMaintenanceProgressClasses(reminder, usagePercent || 0);
+
+  return (
+    <div className={`rounded-2xl border p-3 ${reminder.cardClass}`}>
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div>
+          <div className="font-bold">{reminder.title}</div>
+          <div className="text-sm text-slate-300">{reminder.message}</div>
+        </div>
+
+        <span className={`rounded-full px-2 py-1 text-xs font-bold ring-1 ${reminder.badgeClass}`}>
+          {reminder.status === "no-record" ? "No record" : reminder.status}
+        </span>
+      </div>
+
+      <div className="mb-2">
+        <div className="mb-1 flex justify-between text-xs text-slate-400">
+          <span>{usagePercent === null ? "Not tracked yet" : `${number(usagePercent, 0)}% used`}</span>
+          <span>100% due</span>
+        </div>
+
+        <div className="relative h-4 overflow-hidden rounded-full bg-slate-950 ring-1 ring-white/10">
+          <div
+            className={`h-full rounded-full ${classes.bar}`}
+            style={{ width: `${displayedUsage}%` }}
+          />
+          <div className="absolute bottom-0 top-0 w-px bg-white/50" style={{ left: "80%" }} />
+          <div className="absolute bottom-0 top-0 w-px bg-white/80" style={{ left: "100%" }} />
+        </div>
+      </div>
+
+      {reminder.lastLog && (
+        <div className="mt-2 text-xs text-slate-400">
+          Last done: {number(reminder.lastLog.odometer)} mi • {reminder.lastLog.date}
+        </div>
+      )}
+
+      {reminder.nextDueMileage && reminder.dueDate && (
+        <div className="mt-1 text-xs text-slate-400">
+          Next due: {number(reminder.nextDueMileage)} mi • {reminder.dueDate}
+        </div>
+      )}
+
+      {usagePercent !== null && usagePercent > 125 && (
+        <div className="mt-2 text-xs font-semibold text-red-200">
+          Over 125% used — actual usage is {number(usagePercent, 0)}%.
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function StatsScreen({ vehicle }) {
   const [range, setRange] = useState("1Y");

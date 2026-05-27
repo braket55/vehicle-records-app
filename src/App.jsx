@@ -342,6 +342,7 @@ function normalizeTireSets(tireSets) {
     rotationIntervalMiles: Number(set.rotationIntervalMiles || 5000),
     rotationSoonMiles: Number(set.rotationSoonMiles || 500),
     lastRotatedAtOdometer: set.lastRotatedAtOdometer === undefined ? "" : Number(set.lastRotatedAtOdometer || 0),
+    lastRotatedAtTireMiles: set.lastRotatedAtTireMiles === undefined ? "" : Number(set.lastRotatedAtTireMiles || 0),
     notes: set.notes || "",
     createdAt: set.createdAt || new Date().toISOString(),
   }));
@@ -402,13 +403,9 @@ function getTireRotationStatus(tireSet, vehicle) {
 
   const currentOdometer = getCurrentOdometer(vehicle);
   const interval = Number(tireSet.rotationIntervalMiles || 5000);
-  const installedAt =
-    tireSet.installedAtOdometer === "" ||
-    tireSet.installedAtOdometer === undefined ||
-    tireSet.installedAtOdometer === null
-      ? Number(currentOdometer || 0)
-      : Number(tireSet.installedAtOdometer);
-  const initialMiles = Number(tireSet.initialMiles || 0);
+  const soonThreshold = Number(tireSet.rotationSoonMiles || 500);
+
+  const currentTireMiles = getTireSetMiles(tireSet, vehicle);
 
   const rotationLogs = (vehicle.entries || [])
     .filter(
@@ -422,13 +419,20 @@ function getTireRotationStatus(tireSet, vehicle) {
 
   const lastRotationOdometer = rotationLogs[0]?.odometer;
 
-  const milesSinceRotation =
-    lastRotationOdometer !== undefined
-      ? Math.max(0, currentOdometer - Number(lastRotationOdometer))
-      : initialMiles + Math.max(0, currentOdometer - installedAt);
+  const lastRotatedAtTireMiles =
+    tireSet.lastRotatedAtTireMiles !== undefined &&
+    tireSet.lastRotatedAtTireMiles !== ""
+      ? Number(tireSet.lastRotatedAtTireMiles)
+      : lastRotationOdometer !== undefined
+      ? getTireSetMilesAtOdometer(tireSet, Number(lastRotationOdometer))
+      : 0;
+
+  const milesSinceRotation = Math.max(
+    0,
+    currentTireMiles - lastRotatedAtTireMiles
+  );
 
   const milesRemaining = interval - milesSinceRotation;
-  const soonThreshold = Number(tireSet.rotationSoonMiles || 500);
 
   if (milesRemaining <= 0) {
     return {
@@ -1893,6 +1897,7 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
         updateSet(id, (currentSet) => ({
           ...currentSet,
           lastRotatedAtOdometer: odometer,
+          lastRotatedAtTireMiles: getTireSetMilesAtOdometer(currentSet, odometer),
         }));
       }
 

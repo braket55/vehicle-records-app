@@ -1081,7 +1081,7 @@ function GarageScreen({ state, onSelectVehicle, onAddVehicle, onExportBackup, on
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                  <StatPill label="Logs" value={`${stats.fuelCount} fuel • ${vehicle.entries.filter((entry) => entry.type === "maintenance").length} maintenance`} />
+                  <StatPill label="Total Logs" value={vehicle.entries.length} />
                   <StatPill label="Avg MPG" value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"} />
                 </div>
               </div>
@@ -1174,6 +1174,9 @@ function getMaintenanceProgressClasses(
 
 function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onManageTires, onViewStats, onEditVehicle, onEditEntry, onDeleteEntry }) {
   const stats = calculateFuelStats(vehicle);
+  const fuelLogCount = vehicle.entries.filter((entry) => entry.type === "fuel").length;
+  const maintenanceLogCount = vehicle.entries.filter((entry) => entry.type === "maintenance").length;
+  const tireLogCount = vehicle.entries.filter((entry) => entry.type === "tire").length;
   const currentOdometer = getCurrentOdometer(vehicle);
   const reminders = calculateMaintenanceReminders(vehicle);
   const shouldOpenMaintenanceStatus = reminders.some((reminder) =>
@@ -1224,17 +1227,97 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
             </button>
           </div>
 
-          <div className="mb-4 rounded-2xl bg-black/20 px-3 py-2 text-right backdrop-blur-xl">
-            <div className="text-lg font-bold">{number(currentOdometer)} mi</div>
-            <div className="text-xs text-slate-400">current odometer</div>
+          <div className="mb-4 rounded-2xl bg-black/20 px-4 py-3 backdrop-blur-xl">
+            <div className="grid grid-cols-2 gap-4">
+
+              <div>
+                <div className="text-2xl font-black">
+                  {number(currentOdometer)} mi
+                </div>
+
+                <div className="text-xs text-slate-400 uppercase tracking-wide">
+                  Current Odometer
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-2xl font-black text-emerald-300">
+                  {stats.avgMpg ? number(stats.avgMpg, 1) : "—"}
+                </div>
+
+                <div className="text-xs text-slate-400 uppercase tracking-wide">
+                  Average MPG
+                </div>
+              </div>
+
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Entries" value={vehicle.entries.length} />
-            <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Avg MPG" value={stats.avgMpg ? number(stats.avgMpg, 1) : "—"} />
-            <DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel spent" value={currency(stats.totalFuelCost)} />
-            <DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maintenance spent" value={currency(stats.totalMaintenanceCost)} />
+
+            <div className="col-span-2 rounded-2xl bg-slate-800 p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <ClipboardList size={18} className="text-slate-100" />
+                <div className="text-xs text-slate-400">Logs</div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <div>
+                  <div className="text-lg font-bold">
+                    {vehicle.entries.length}
+                  </div>
+
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Total
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-lg font-bold text-emerald-300">
+                    {fuelLogCount}
+                  </div>
+
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Fuel
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-lg font-bold text-cyan-500">
+                    {maintenanceLogCount}
+                  </div>
+
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Maint.
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-lg font-bold text-amber-700">
+                    {tireLogCount}
+                  </div>
+
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    Tire
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <DashboardStat
+              icon={<Fuel size={18} className="text-emerald-400" />}
+              label="Fuel spent"
+              value={currency(stats.totalFuelCost)}
+            />
+
+            <DashboardStat
+              icon={<Wrench size={18} className="text-blue-400" />}
+              label="Maintenance spent"
+              value={currency(stats.totalMaintenanceCost)}
+            />
+
           </div>
+
         </div>
       </div>
 
@@ -1245,7 +1328,7 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
         <button onClick={onLogMaintenance} className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40">
           <Wrench size={24} /> Log Maintenance
         </button>
-        <button onClick={onManageTires} className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20">
+        <button onClick={onManageTires} className="flex items-center justify-center gap-3 rounded-3xl bg-amber-700/80 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20">
           <CircleDot size={22} /> Tire Sets
         </button>
         <button onClick={onViewStats} className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30">

@@ -1107,8 +1107,16 @@ function getMaintenanceUsage(reminder, currentOdometer) {
   return Math.max(mileageUsage, timeUsage) * 100;
 }
 
-function getMaintenanceProgressClasses(reminder, usagePercent) {
-  if (reminder.status === "overdue" || reminder.status === "due" || usagePercent >= 100) {
+function getMaintenanceProgressClasses(
+  reminder,
+  usagePercent,
+  soonPercent
+) {
+  if (
+    reminder.status === "overdue" ||
+    reminder.status === "due" ||
+    usagePercent >= 100
+  ) {
     return {
       bar: "bg-red-500",
       text: "text-red-200",
@@ -1116,7 +1124,10 @@ function getMaintenanceProgressClasses(reminder, usagePercent) {
     };
   }
 
-  if (reminder.status === "soon" || usagePercent >= 80) {
+  if (
+    reminder.status === "soon" ||
+    usagePercent >= soonPercent
+  ) {
     return {
       bar: "bg-amber-400",
       text: "text-amber-100",
@@ -1323,6 +1334,37 @@ function TireStatusSection({ vehicle }) {
   const storedSets = tireSets.filter((set) => set.status === "stored");
   const retiredSets = tireSets.filter((set) => set.status === "retired");
 
+  const rotationInterval = Number(activeSet?.rotationIntervalMiles || 5000);
+  const rotationUsagePercent =
+    rotationStatus && rotationInterval > 0
+      ? (rotationStatus.milesSinceRotation / rotationInterval) * 100
+      : null;
+
+  const displayedRotationUsage =
+    rotationUsagePercent === null ? 0 : Math.min(rotationUsagePercent, 125);
+
+  const rotationSoonPercent =
+    rotationInterval > 0
+      ? ((rotationInterval - Number(activeSet?.rotationSoonMiles || 500)) /
+          rotationInterval) *
+        100
+      : 80;
+
+  const rotationBarClass =
+    rotationStatus?.status === "overdue" || rotationUsagePercent >= 100
+      ? "bg-red-500"
+      : rotationStatus?.status === "soon" ||
+        rotationUsagePercent >= rotationSoonPercent
+      ? "bg-amber-400"
+      : "bg-emerald-500";
+
+  const rotationBadgeClass =
+    rotationStatus?.status === "overdue"
+      ? "bg-red-500/20 text-red-200 ring-red-400/30"
+      : rotationStatus?.status === "soon"
+      ? "bg-amber-400/20 text-amber-100 ring-amber-300/30"
+      : "bg-emerald-500/15 text-emerald-200 ring-emerald-400/20";
+
   return (
     <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
       <button
@@ -1376,20 +1418,62 @@ function TireStatusSection({ vehicle }) {
               )}
 
               {rotationStatus && (
-                <div
-                  className={`mt-3 rounded-2xl p-3 text-sm ring-1 ${
-                    rotationStatus.status === "overdue"
-                      ? "bg-red-500/15 text-red-200 ring-red-400/30"
-                      : rotationStatus.status === "soon"
-                      ? "bg-amber-400/15 text-amber-100 ring-amber-300/30"
-                      : "bg-emerald-500/10 text-emerald-200 ring-emerald-400/20"
-                  }`}
-                >
-                  <div className="font-bold">Tire Rotation</div>
-                  <div>{rotationStatus.message}</div>
-                  <div className="text-xs opacity-80">
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-bold">Tire Rotation</div>
+                      <div className="text-sm text-slate-300">{rotationStatus.message}</div>
+                    </div>
+
+                    <span className={`rounded-full px-2 py-1 text-xs font-bold ring-1 ${rotationBadgeClass}`}>
+                      {rotationStatus.status}
+                    </span>
+                  </div>
+
+                  <div className="mb-2">
+                    <div className="mb-1 flex justify-between text-xs text-slate-400">
+                      <span>{number(rotationUsagePercent, 0)}% used</span>
+                      <span>100% due</span>
+                    </div>
+
+                    <div className="relative h-4 overflow-hidden rounded-full bg-slate-950 ring-1 ring-white/10">
+                      <div
+                        className={`h-full rounded-full ${rotationBarClass}`}
+                        style={{ width: `${displayedRotationUsage}%` }}
+                      />
+
+                      <div
+                        className="absolute bottom-0 top-0 w-px bg-white/50"
+                        style={{
+                          left: `${Math.max(
+                            0,
+                            Math.min(
+                              100,
+                              ((rotationInterval - Number(activeSet?.rotationSoonMiles || 500)) /
+                                rotationInterval) *
+                                100
+                            )
+                          )}%`,
+                        }}
+                      />
+
+                      <div className="absolute bottom-0 top-0 w-px bg-white/80" style={{ left: "100%" }} />
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-xs text-slate-400">
                     {number(rotationStatus.milesSinceRotation)} mi since last rotation
                   </div>
+
+                  <div className="mt-1 text-xs text-slate-400">
+                    Next due: {number(getCurrentOdometer(vehicle) + rotationStatus.milesRemaining)} mi
+                  </div>
+
+                  {rotationUsagePercent > 125 && (
+                    <div className="mt-2 text-xs font-semibold text-red-200">
+                      Over 125% used — actual usage is {number(rotationUsagePercent, 0)}%.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1500,7 +1584,19 @@ function MaintenanceStatusSection({ reminders, currentOdometer, expanded, onTogg
 function MaintenanceStatusCard({ reminder, currentOdometer }) {
   const usagePercent = getMaintenanceUsage(reminder, currentOdometer);
   const displayedUsage = usagePercent === null ? 0 : Math.min(usagePercent, 125);
-  const classes = getMaintenanceProgressClasses(reminder, usagePercent || 0);
+
+  const soonPercent =
+    reminder.intervalMiles > 0
+      ? ((reminder.intervalMiles - reminder.soonMiles) /
+          reminder.intervalMiles) *
+        100
+      : 80;
+  
+  const classes = getMaintenanceProgressClasses(
+    reminder,
+    usagePercent || 0,
+    soonPercent
+  );
 
   return (
     <div className={`rounded-2xl border p-3 ${reminder.cardClass}`}>
@@ -1526,7 +1622,14 @@ function MaintenanceStatusCard({ reminder, currentOdometer }) {
             className={`h-full rounded-full ${classes.bar}`}
             style={{ width: `${displayedUsage}%` }}
           />
-          <div className="absolute bottom-0 top-0 w-px bg-white/50" style={{ left: "80%" }} />
+
+          <div
+            className="absolute bottom-0 top-0 w-px bg-white/50"
+            style={{
+              left: `${Math.max(0, Math.min(100, soonPercent))}%`,
+            }}
+          />
+
           <div className="absolute bottom-0 top-0 w-px bg-white/80" style={{ left: "100%" }} />
         </div>
       </div>

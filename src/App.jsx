@@ -14,6 +14,7 @@ import {
   Pencil,
   ChevronDown,
   BarChart3,
+  CircleDot,
 } from "lucide-react";
 
 const DB_NAME = "vehicle-records-db";
@@ -91,7 +92,18 @@ async function loadState() {
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(STATE_KEY);
 
-    request.onsuccess = () => resolve(request.result || starterState);
+    request.onsuccess = () => {
+      const loaded = request.result || starterState;
+
+      resolve({
+        ...loaded,
+        vehicles: loaded.vehicles.map((vehicle) => ({
+          ...vehicle,
+          maintenanceSchedule: normalizeMaintenanceSchedule(vehicle.maintenanceSchedule),
+          tireSets: normalizeTireSets(vehicle.tireSets),
+        })),
+      });
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -309,6 +321,58 @@ function normalizeMaintenanceSchedule(schedule) {
     soonMiles: Number(item.soonMiles ?? DEFAULT_SOON_MILES),
     soonMonths: Number(item.soonMonths ?? DEFAULT_SOON_MONTHS),
   }));
+}
+
+function normalizeTireSets(tireSets) {
+  if (!Array.isArray(tireSets)) return [];
+
+  return tireSets.map((set) => ({
+    id: set.id || crypto.randomUUID(),
+    name: set.name || "Untitled Tire Set",
+    brand: set.brand || "",
+    model: set.model || "",
+    size: set.size || "",
+    status: set.status || "stored", // active, stored, retired
+    purchaseDate: set.purchaseDate || "",
+    purchaseOdometer: Number(set.purchaseOdometer || 0),
+    installedAtOdometer: set.installedAtOdometer === undefined ? "" : Number(set.installedAtOdometer || 0),
+    removedAtOdometer: set.removedAtOdometer === undefined ? "" : Number(set.removedAtOdometer || 0),
+    storedMiles: Number(set.storedMiles || 0),
+    notes: set.notes || "",
+    createdAt: set.createdAt || new Date().toISOString(),
+  }));
+}
+
+function getTireSets(vehicle) {
+  return normalizeTireSets(vehicle.tireSets);
+}
+
+function getActiveTireSet(vehicle) {
+  return getTireSets(vehicle).find((set) => set.status === "active") || null;
+}
+
+function getTireSetMiles(tireSet, vehicle) {
+  const currentOdometer = getCurrentOdometer(vehicle);
+  const storedMiles = Number(tireSet.storedMiles || 0);
+
+  if (tireSet.status !== "active") return storedMiles;
+
+  const installedAt = Number(tireSet.installedAtOdometer || currentOdometer || 0);
+  const activeMiles = Math.max(0, currentOdometer - installedAt);
+
+  return storedMiles + activeMiles;
+}
+
+function makeTireHistoryEntry({ title, date, odometer, notes = "" }) {
+  return {
+    id: crypto.randomUUID(),
+    type: "tire",
+    date,
+    odometer: Number(odometer || 0),
+    title,
+    notes,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function getFuelEntriesSorted(vehicle) {
@@ -640,6 +704,7 @@ function App() {
       odometer: "",
       photo: "",
       maintenanceSchedule: defaultMaintenanceSchedule,
+      tireSets: [],
       entries: [],
     };
     setState((current) => ({ ...current, vehicles: [...current.vehicles, newVehicle] }));
@@ -716,6 +781,7 @@ function App() {
               const entry = selectedVehicle.entries.find((entry) => entry.id === entryId);
               setEntryPendingDelete(entry || null);
             }}
+            onManageTires={() => setScreen("tires")}
           />
         )}
 
@@ -738,6 +804,17 @@ function App() {
             onCancel={() => setScreen("dashboard")}
             onRequestDeleteVehicle={() => setVehiclePendingDelete(selectedVehicle)}
             onSave={(updatedVehicle) => { updateVehicle(selectedVehicle.id, () => updatedVehicle); setScreen("dashboard"); }}
+          />
+        )}
+
+        {screen === "tires" && selectedVehicle && (
+          <TireSetsScreen
+            vehicle={selectedVehicle}
+            onCancel={() => setScreen("dashboard")}
+            onSave={(updatedVehicle) => {
+              updateVehicle(selectedVehicle.id, () => updatedVehicle);
+              setScreen("dashboard");
+            }}
           />
         )}
 
@@ -973,7 +1050,7 @@ function getMaintenanceProgressClasses(reminder, usagePercent) {
 }
 
 
-function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onViewStats, onEditVehicle, onEditEntry, onDeleteEntry }) {
+function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedule, onManageTires, onViewStats, onEditVehicle, onEditEntry, onDeleteEntry }) {
   const stats = calculateFuelStats(vehicle);
   const currentOdometer = getCurrentOdometer(vehicle);
   const reminders = calculateMaintenanceReminders(vehicle);
@@ -1046,6 +1123,9 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
         <button onClick={onLogMaintenance} className="flex items-center justify-center gap-3 rounded-3xl bg-cyan-500 px-5 py-5 text-lg font-bold text-slate-950 shadow-cyan-950/40">
           <Wrench size={24} /> Log Maintenance
         </button>
+        <button onClick={onManageTires} className="flex items-center justify-center gap-3 rounded-3xl bg-slate-800 px-5 py-4 text-base font-bold text-slate-100 shadow-lg shadow-black/20">
+          <CircleDot size={22} /> Tire Sets
+        </button>
         <button onClick={onViewStats} className="flex items-center justify-center gap-3 rounded-3xl bg-indigo-500 px-5 py-4 text-base font-bold text-white shadow-lg shadow-indigo-950/30">
           <BarChart3 size={22} /> Stats & Analytics
         </button>
@@ -1053,6 +1133,8 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
           <ClipboardList size={22} /> Manage Maintenance Schedule
         </button>
       </div>
+
+      <TireStatusSection vehicle={vehicle} />
 
       <MaintenanceStatusSection
         reminders={reminders}
@@ -1127,6 +1209,187 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
   );
 }
 
+function TireStatusSection({ vehicle }) {
+  const [expanded, setExpanded] = useState(true);
+
+  const tireSets = getTireSets(vehicle);
+
+  const activeSet =
+    tireSets.find((set) => set.status === "active") || null;
+
+  const storedSets = tireSets.filter(
+    (set) => set.status === "stored"
+  );
+
+  const retiredSets = tireSets.filter(
+    (set) => set.status === "retired"
+  );
+
+  return (
+    <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
+      <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        className="flex w-full items-center justify-between"
+      >
+        <div>
+          <h2 className="text-left text-lg font-bold">
+            Tire Status
+          </h2>
+
+          <p className="text-left text-sm text-slate-400">
+            {activeSet
+              ? `${activeSet.name} currently installed`
+              : "No active tire set"}
+          </p>
+        </div>
+
+        <motion.div
+          animate={{ rotate: expanded ? 180 : 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          <ChevronDown
+            size={22}
+            className="text-slate-300"
+          />
+        </motion.div>
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-4">
+          {activeSet ? (
+            <div className="rounded-3xl border border-emerald-500/20 bg-emerald-950/20 p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-black">
+                    {activeSet.name}
+                  </div>
+
+                  <div className="text-sm text-slate-300">
+                    {activeSet.brand} {activeSet.model}
+                  </div>
+                </div>
+
+                <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-200">
+                  Active
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <StatPill
+                  label="Size"
+                  value={activeSet.size || "—"}
+                />
+
+                <StatPill
+                  label="Miles"
+                  value={`${number(
+                    getTireSetMiles(activeSet, vehicle)
+                  )} mi`}
+                />
+              </div>
+
+              {activeSet.installedAtOdometer !== "" && (
+                <div className="mt-3 text-sm text-slate-400">
+                  Installed at{" "}
+                  {number(activeSet.installedAtOdometer)} mi
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-3xl bg-slate-950 p-4 text-sm text-slate-400 ring-1 ring-white/10">
+              No tire set is currently marked active.
+            </div>
+          )}
+
+          {storedSets.length > 0 && (
+            <div>
+              <div className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-400">
+                Stored Sets
+              </div>
+
+              <div className="space-y-2">
+                {storedSets.map((set) => (
+                  <div
+                    key={set.id}
+                    className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold">
+                          {set.name}
+                        </div>
+
+                        <div className="text-sm text-slate-400">
+                          {set.brand} {set.model}
+                        </div>
+                      </div>
+
+                      <div className="text-right text-sm">
+                        <div className="font-bold">
+                          {number(
+                            getTireSetMiles(set, vehicle)
+                          )}{" "}
+                          mi
+                        </div>
+
+                        <div className="text-slate-400">
+                          stored
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {retiredSets.length > 0 && (
+            <div>
+              <div className="mb-2 text-sm font-bold uppercase tracking-wide text-slate-400">
+                Retired Sets
+              </div>
+
+              <div className="space-y-2">
+                {retiredSets.map((set) => (
+                  <div
+                    key={set.id}
+                    className="rounded-2xl bg-slate-950/70 p-3 ring-1 ring-white/5"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-300">
+                          {set.name}
+                        </div>
+
+                        <div className="text-sm text-slate-500">
+                          {set.brand} {set.model}
+                        </div>
+                      </div>
+
+                      <div className="text-right text-sm">
+                        <div className="font-bold text-slate-300">
+                          {number(
+                            getTireSetMiles(set, vehicle)
+                          )}{" "}
+                          mi
+                        </div>
+
+                        <div className="text-slate-500">
+                          retired
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function MaintenanceStatusSection({ reminders, currentOdometer, expanded, onToggle }) {
   const alertCount = reminders.filter((reminder) =>
@@ -1218,6 +1481,248 @@ function MaintenanceStatusCard({ reminder, currentOdometer }) {
   );
 }
 
+function TireSetsScreen({ vehicle, onCancel, onSave }) {
+  const [tireSets, setTireSets] = useState(getTireSets(vehicle));
+
+  const currentOdometer = getCurrentOdometer(vehicle);
+
+  function updateTireSet(id, field, value) {
+    setTireSets((current) =>
+      current.map((set) =>
+        set.id === id
+          ? {
+              ...set,
+              [field]: value,
+            }
+          : set
+      )
+    );
+  }
+
+  function addTireSet() {
+    setTireSets((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        name: "New Tire Set",
+        brand: "",
+        model: "",
+        size: "",
+        status: "stored",
+        purchaseDate: "",
+        purchaseOdometer: currentOdometer,
+        installedAtOdometer: "",
+        removedAtOdometer: "",
+        storedMiles: 0,
+        notes: "",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+  }
+
+  function deleteTireSet(id) {
+    setTireSets((current) => current.filter((set) => set.id !== id));
+  }
+
+  function installTireSet(id) {
+    setTireSets((current) =>
+      current.map((set) => {
+        if (set.id !== id) {
+          if (set.status === "active") {
+            return {
+              ...set,
+              status: "stored",
+              removedAtOdometer: currentOdometer,
+              storedMiles: getTireSetMiles(set, vehicle),
+            };
+          }
+
+          return set;
+        }
+
+        return {
+          ...set,
+          status: "active",
+          installedAtOdometer: currentOdometer,
+          removedAtOdometer: "",
+        };
+      })
+    );
+  }
+
+  function retireTireSet(id) {
+    setTireSets((current) =>
+      current.map((set) =>
+        set.id === id
+          ? {
+              ...set,
+              status: "retired",
+              removedAtOdometer: currentOdometer,
+              storedMiles: getTireSetMiles(set, vehicle),
+            }
+          : set
+      )
+    );
+  }
+
+  function submit(event) {
+    event.preventDefault();
+
+    onSave({
+      ...vehicle,
+      tireSets,
+    });
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="space-y-4 rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"
+    >
+      <div>
+        <h2 className="text-xl font-bold">Tire Sets</h2>
+
+        <p className="mt-1 text-sm text-slate-400">
+          Track active, stored, and retired tire sets for this vehicle.
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {tireSets.map((set) => {
+          const totalMiles = getTireSetMiles(set, vehicle);
+
+          return (
+            <div
+              key={set.id}
+              className="rounded-3xl bg-slate-950 p-4 ring-1 ring-white/10"
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-bold">{set.name}</div>
+
+                  <div className="text-sm text-slate-400">
+                    {set.brand} {set.model}
+                  </div>
+                </div>
+
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-bold ${
+                    set.status === "active"
+                      ? "bg-emerald-500/20 text-emerald-200"
+                      : set.status === "stored"
+                      ? "bg-amber-500/20 text-amber-100"
+                      : "bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {set.status}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field
+                  label="Set Name"
+                  value={set.name}
+                  onChange={(value) =>
+                    updateTireSet(set.id, "name", value)
+                  }
+                />
+
+                <Field
+                  label="Size"
+                  value={set.size}
+                  onChange={(value) =>
+                    updateTireSet(set.id, "size", value)
+                  }
+                />
+
+                <Field
+                  label="Brand"
+                  value={set.brand}
+                  onChange={(value) =>
+                    updateTireSet(set.id, "brand", value)
+                  }
+                />
+
+                <Field
+                  label="Model"
+                  value={set.model}
+                  onChange={(value) =>
+                    updateTireSet(set.id, "model", value)
+                  }
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-slate-900 p-3">
+                <div className="text-sm text-slate-400">
+                  Total Tire Miles
+                </div>
+
+                <div className="text-2xl font-black">
+                  {number(totalMiles)} mi
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {set.status !== "active" && (
+                  <button
+                    type="button"
+                    onClick={() => installTireSet(set.id)}
+                    className="rounded-2xl bg-emerald-500 px-4 py-2 font-bold text-slate-950"
+                  >
+                    Install
+                  </button>
+                )}
+
+                {set.status !== "retired" && (
+                  <button
+                    type="button"
+                    onClick={() => retireTireSet(set.id)}
+                    className="rounded-2xl bg-amber-500 px-4 py-2 font-bold text-slate-950"
+                  >
+                    Retire
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => deleteTireSet(set.id)}
+                  className="rounded-2xl bg-red-600 px-4 py-2 font-bold text-white"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        type="button"
+        onClick={addTireSet}
+        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-800 px-4 py-4 font-semibold"
+      >
+        <Plus size={18} /> Add Tire Set
+      </button>
+
+      <div className="grid grid-cols-2 gap-3 pt-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-2xl bg-slate-800 px-4 py-4 font-semibold"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="submit"
+          className="rounded-2xl bg-cyan-500 px-4 py-4 font-bold text-slate-950"
+        >
+          Save Tire Sets
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function StatsScreen({ vehicle }) {
   const [range, setRange] = useState("1Y");

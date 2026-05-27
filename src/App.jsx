@@ -28,7 +28,6 @@ const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 const defaultMaintenanceSchedule = [
   { id: "oil-change", title: "Oil Change", intervalMiles: 5000, intervalMonths: 6, soonMiles: 500, soonMonths: 1 },
-  { id: "tire-rotation", title: "Tire Rotation", intervalMiles: 5000, intervalMonths: 6, soonMiles: 500, soonMonths: 1 },
   { id: "engine-air-filter", title: "Engine Air Filter", intervalMiles: 30000, intervalMonths: 36, soonMiles: 1000, soonMonths: 2 },
   { id: "cabin-air-filter", title: "Cabin Air Filter", intervalMiles: 15000, intervalMonths: 12, soonMiles: 1000, soonMonths: 1 },
 ];
@@ -313,7 +312,8 @@ function makeServiceId(title) {
 
 function normalizeMaintenanceSchedule(schedule) {
   const source = Array.isArray(schedule) && schedule.length > 0 ? schedule : defaultMaintenanceSchedule;
-  return source.map((item) => ({
+  const filteredSource = source.filter((item) => item.id !== "tire-rotation");
+  return filteredSource.map((item) => ({
     id: item.id || makeServiceId(item.title),
     title: item.title || "Untitled Service",
     intervalMiles: Number(item.intervalMiles || 0),
@@ -332,12 +332,16 @@ function normalizeTireSets(tireSets) {
     brand: set.brand || "",
     model: set.model || "",
     size: set.size || "",
-    status: set.status || "stored", // active, stored, retired
+    status: set.status || "stored",
     purchaseDate: set.purchaseDate || "",
     purchaseOdometer: Number(set.purchaseOdometer || 0),
     installedAtOdometer: set.installedAtOdometer === undefined ? "" : Number(set.installedAtOdometer || 0),
     removedAtOdometer: set.removedAtOdometer === undefined ? "" : Number(set.removedAtOdometer || 0),
+    initialMiles: Number(set.initialMiles || 0),
     storedMiles: Number(set.storedMiles || 0),
+    rotationIntervalMiles: Number(set.rotationIntervalMiles || 5000),
+    rotationSoonMiles: Number(set.rotationSoonMiles || 500),
+    lastRotatedAtOdometer: set.lastRotatedAtOdometer === undefined ? "" : Number(set.lastRotatedAtOdometer || 0),
     notes: set.notes || "",
     createdAt: set.createdAt || new Date().toISOString(),
   }));
@@ -353,20 +357,87 @@ function getActiveTireSet(vehicle) {
 
 function getTireSetMiles(tireSet, vehicle) {
   const currentOdometer = getCurrentOdometer(vehicle);
+
+  const initialMiles = Number(tireSet.initialMiles || 0);
   const storedMiles = Number(tireSet.storedMiles || 0);
 
-  if (tireSet.status !== "active") return storedMiles;
+  if (tireSet.status !== "active") {
+    return initialMiles + storedMiles;
+  }
 
-  const installedAt = Number(tireSet.installedAtOdometer || currentOdometer || 0);
-  const activeMiles = Math.max(0, currentOdometer - installedAt);
+  const installedAt = Number(
+    tireSet.installedAtOdometer || currentOdometer || 0
+  );
 
-  return storedMiles + activeMiles;
+  const activeMiles = Math.max(
+    0,
+    currentOdometer - installedAt
+  );
+
+  return initialMiles + storedMiles + activeMiles;
 }
 
-function makeTireHistoryEntry({ title, date, odometer, notes = "" }) {
+function getTireRotationStatus(tireSet, vehicle) {
+  if (!tireSet || tireSet.status !== "active") return null;
+
+  const currentOdometer = getCurrentOdometer(vehicle);
+  const interval = Number(tireSet.rotationIntervalMiles || 5000);
+  const installedAt = Number(tireSet.installedAtOdometer || currentOdometer || 0);
+  const initialMiles = Number(tireSet.initialMiles || 0);
+
+  const rotationLogs = (vehicle.entries || [])
+    .filter(
+      (entry) =>
+        entry.type === "tire" &&
+        entry.action === "rotation" &&
+        entry.tireSetId === tireSet.id &&
+        Number(entry.odometer) > 0
+    )
+    .sort((a, b) => Number(b.odometer) - Number(a.odometer));
+
+  const lastRotationOdometer = rotationLogs[0]?.odometer;
+
+  const milesSinceRotation =
+    lastRotationOdometer !== undefined
+      ? Math.max(0, currentOdometer - Number(lastRotationOdometer))
+      : initialMiles + Math.max(0, currentOdometer - installedAt);
+
+  const milesRemaining = interval - milesSinceRotation;
+  const soonThreshold = Number(tireSet.rotationSoonMiles || 500);
+
+  if (milesRemaining <= 0) {
+    return {
+      status: "overdue",
+      message: `Rotation overdue by ${number(Math.abs(milesRemaining))} mi`,
+      milesSinceRotation,
+      milesRemaining,
+    };
+  }
+
+  if (milesRemaining <= soonThreshold) {
+    return {
+      status: "soon",
+      message: `Rotate soon: ${number(milesRemaining)} mi remaining`,
+      milesSinceRotation,
+      milesRemaining,
+    };
+  }
+
+  return {
+    status: "ok",
+    message: `Rotate in ${number(milesRemaining)} mi`,
+    milesSinceRotation,
+    milesRemaining,
+  };
+}
+
+function makeTireHistoryEntry({ title, action, tireSetId, tireSetName, date, odometer, notes = "" }) {
   return {
     id: crypto.randomUUID(),
     type: "tire",
+    action,
+    tireSetId,
+    tireSetName,
     date,
     odometer: Number(odometer || 0),
     title,
@@ -407,7 +478,7 @@ function calculateEntryMpg(sortedFuelEntries, index) {
 
 function getCurrentOdometer(vehicle) {
   const odometerEntries = vehicle.entries.filter(
-    (entry) => ["fuel", "maintenance"].includes(entry.type) && entry.date && Number(entry.odometer) > 0
+    (entry) => ["fuel", "maintenance", "tire"].includes(entry.type) && entry.date && Number(entry.odometer) > 0
   );
   if (odometerEntries.length === 0) return Number(vehicle.odometer || 0);
   const mostRecentDate = odometerEntries.map((entry) => entry.date).sort().at(-1);
@@ -531,12 +602,23 @@ function calculateMaintenanceReminders(vehicle) {
 
 function getReminderSummary(vehicle) {
   const reminders = calculateMaintenanceReminders(vehicle);
-  if (reminders.some((reminder) => reminder.status === "overdue" || reminder.status === "due")) {
+  const activeTireSet = getActiveTireSet(vehicle);
+  const tireRotationStatus = getTireRotationStatus(activeTireSet, vehicle);
+
+  if (
+    reminders.some((reminder) => reminder.status === "overdue" || reminder.status === "due") ||
+    tireRotationStatus?.status === "overdue"
+  ) {
     return { status: "danger", label: "Due", className: "bg-red-500 text-white shadow-red-950/40" };
   }
-  if (reminders.some((reminder) => reminder.status === "soon")) {
+
+  if (
+    reminders.some((reminder) => reminder.status === "soon") ||
+    tireRotationStatus?.status === "soon"
+  ) {
     return { status: "soon", label: "Soon", className: "bg-amber-400 text-slate-950 shadow-amber-950/30" };
   }
+
   return null;
 }
 
@@ -1195,6 +1277,20 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
                       </div>
                     )}
 
+                    {entry.type === "tire" && (
+                      <div className="mt-2 text-sm text-slate-300">
+                        <div className="font-semibold">{entry.title || "Tire Event"}</div>
+                        <div>
+                          {entry.action === "install" && "Installed"}
+                          {entry.action === "rotation" && "Rotated"}
+                          {entry.action === "retire" && "Retired"}
+                          {!entry.action && "Tire update"}
+                          {entry.tireSetName ? ` • ${entry.tireSetName}` : ""}
+                        </div>
+                        {entry.notes && <div className="text-slate-400">{entry.notes}</div>}
+                      </div>
+                    )}
+
                     {entry.photo && <img src={entry.photo} alt="Fuel log attachment" className="mt-3 h-36 w-full rounded-2xl object-cover ring-1 ring-white/10" />}
                     {entry.attachments?.length > 0 && <div className="mt-3 grid grid-cols-2 gap-2">{entry.attachments.map((attachment, index) => <img key={index} src={attachment} alt={`Maintenance attachment ${index + 1}`} className="h-28 w-full rounded-2xl object-cover ring-1 ring-white/10" />)}</div>}
                     {entry.notes && <p className="mt-2 text-sm text-slate-400">{entry.notes}</p>}
@@ -1210,20 +1306,22 @@ function VehicleDashboard({ vehicle, onLogFuel, onLogMaintenance, onManageSchedu
 }
 
 function TireStatusSection({ vehicle }) {
-  const [expanded, setExpanded] = useState(true);
-
   const tireSets = getTireSets(vehicle);
 
-  const activeSet =
-    tireSets.find((set) => set.status === "active") || null;
+  const activeSet = tireSets.find((set) => set.status === "active") || null;
+  const rotationStatus = getTireRotationStatus(activeSet, vehicle);
 
-  const storedSets = tireSets.filter(
-    (set) => set.status === "stored"
-  );
+  const shouldOpenTireStatus =
+    rotationStatus && ["soon", "overdue"].includes(rotationStatus.status);
 
-  const retiredSets = tireSets.filter(
-    (set) => set.status === "retired"
-  );
+  const [expanded, setExpanded] = useState(Boolean(shouldOpenTireStatus));
+
+  useEffect(() => {
+    setExpanded(Boolean(shouldOpenTireStatus));
+  }, [vehicle.id, shouldOpenTireStatus]);
+
+  const storedSets = tireSets.filter((set) => set.status === "stored");
+  const retiredSets = tireSets.filter((set) => set.status === "retired");
 
   return (
     <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10">
@@ -1233,25 +1331,19 @@ function TireStatusSection({ vehicle }) {
         className="flex w-full items-center justify-between"
       >
         <div>
-          <h2 className="text-left text-lg font-bold">
-            Tire Status
-          </h2>
+          <h2 className="text-left text-lg font-bold">Tire Status</h2>
 
           <p className="text-left text-sm text-slate-400">
-            {activeSet
+            {rotationStatus && ["soon", "overdue"].includes(rotationStatus.status)
+              ? rotationStatus.message
+              : activeSet
               ? `${activeSet.name} currently installed`
               : "No active tire set"}
           </p>
         </div>
 
-        <motion.div
-          animate={{ rotate: expanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
-        >
-          <ChevronDown
-            size={22}
-            className="text-slate-300"
-          />
+        <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+          <ChevronDown size={22} className="text-slate-300" />
         </motion.div>
       </button>
 
@@ -1261,10 +1353,7 @@ function TireStatusSection({ vehicle }) {
             <div className="rounded-3xl border border-emerald-500/20 bg-emerald-950/20 p-4">
               <div className="mb-2 flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-black">
-                    {activeSet.name}
-                  </div>
-
+                  <div className="text-lg font-black">{activeSet.name}</div>
                   <div className="text-sm text-slate-300">
                     {activeSet.brand} {activeSet.model}
                   </div>
@@ -1276,23 +1365,31 @@ function TireStatusSection({ vehicle }) {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <StatPill
-                  label="Size"
-                  value={activeSet.size || "—"}
-                />
-
-                <StatPill
-                  label="Miles"
-                  value={`${number(
-                    getTireSetMiles(activeSet, vehicle)
-                  )} mi`}
-                />
+                <StatPill label="Size" value={activeSet.size || "—"} />
+                <StatPill label="Miles" value={`${number(getTireSetMiles(activeSet, vehicle))} mi`} />
               </div>
 
               {activeSet.installedAtOdometer !== "" && (
                 <div className="mt-3 text-sm text-slate-400">
-                  Installed at{" "}
-                  {number(activeSet.installedAtOdometer)} mi
+                  Installed at {number(activeSet.installedAtOdometer)} mi
+                </div>
+              )}
+
+              {rotationStatus && (
+                <div
+                  className={`mt-3 rounded-2xl p-3 text-sm ring-1 ${
+                    rotationStatus.status === "overdue"
+                      ? "bg-red-500/15 text-red-200 ring-red-400/30"
+                      : rotationStatus.status === "soon"
+                      ? "bg-amber-400/15 text-amber-100 ring-amber-300/30"
+                      : "bg-emerald-500/10 text-emerald-200 ring-emerald-400/20"
+                  }`}
+                >
+                  <div className="font-bold">Tire Rotation</div>
+                  <div>{rotationStatus.message}</div>
+                  <div className="text-xs opacity-80">
+                    {number(rotationStatus.milesSinceRotation)} mi since last rotation
+                  </div>
                 </div>
               )}
             </div>
@@ -1310,32 +1407,18 @@ function TireStatusSection({ vehicle }) {
 
               <div className="space-y-2">
                 {storedSets.map((set) => (
-                  <div
-                    key={set.id}
-                    className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10"
-                  >
+                  <div key={set.id} className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="font-semibold">
-                          {set.name}
-                        </div>
-
+                        <div className="font-semibold">{set.name}</div>
                         <div className="text-sm text-slate-400">
                           {set.brand} {set.model}
                         </div>
                       </div>
 
                       <div className="text-right text-sm">
-                        <div className="font-bold">
-                          {number(
-                            getTireSetMiles(set, vehicle)
-                          )}{" "}
-                          mi
-                        </div>
-
-                        <div className="text-slate-400">
-                          stored
-                        </div>
+                        <div className="font-bold">{number(getTireSetMiles(set, vehicle))} mi</div>
+                        <div className="text-slate-400">stored</div>
                       </div>
                     </div>
                   </div>
@@ -1352,16 +1435,10 @@ function TireStatusSection({ vehicle }) {
 
               <div className="space-y-2">
                 {retiredSets.map((set) => (
-                  <div
-                    key={set.id}
-                    className="rounded-2xl bg-slate-950/70 p-3 ring-1 ring-white/5"
-                  >
+                  <div key={set.id} className="rounded-2xl bg-slate-950/70 p-3 ring-1 ring-white/5">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="font-semibold text-slate-300">
-                          {set.name}
-                        </div>
-
+                        <div className="font-semibold text-slate-300">{set.name}</div>
                         <div className="text-sm text-slate-500">
                           {set.brand} {set.model}
                         </div>
@@ -1369,15 +1446,9 @@ function TireStatusSection({ vehicle }) {
 
                       <div className="text-right text-sm">
                         <div className="font-bold text-slate-300">
-                          {number(
-                            getTireSetMiles(set, vehicle)
-                          )}{" "}
-                          mi
+                          {number(getTireSetMiles(set, vehicle))} mi
                         </div>
-
-                        <div className="text-slate-500">
-                          retired
-                        </div>
+                        <div className="text-slate-500">retired</div>
                       </div>
                     </div>
                   </div>
@@ -1482,7 +1553,9 @@ function MaintenanceStatusCard({ reminder, currentOdometer }) {
 }
 
 function TireSetsScreen({ vehicle, onCancel, onSave }) {
+  const [pendingRotations, setPendingRotations] = useState([]);
   const [tireSets, setTireSets] = useState(getTireSets(vehicle));
+  const [entries, setEntries] = useState(vehicle.entries || []);
 
   const currentOdometer = getCurrentOdometer(vehicle);
 
@@ -1511,10 +1584,14 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
         status: "stored",
         purchaseDate: "",
         purchaseOdometer: currentOdometer,
+        initialMiles: 0,
         installedAtOdometer: "",
         removedAtOdometer: "",
         storedMiles: 0,
         notes: "",
+        rotationIntervalMiles: 5000,
+        rotationSoonMiles: 500,
+        lastRotatedAtOdometer: "",
         createdAt: new Date().toISOString(),
       },
     ]);
@@ -1525,32 +1602,66 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
   }
 
   function installTireSet(id) {
-    setTireSets((current) =>
-      current.map((set) => {
-        if (set.id !== id) {
-          if (set.status === "active") {
-            return {
-              ...set,
-              status: "stored",
-              removedAtOdometer: currentOdometer,
-              storedMiles: getTireSetMiles(set, vehicle),
-            };
-          }
+  const tireSet = tireSets.find((set) => set.id === id);
 
-          return set;
+  if (!tireSet) return;
+
+  setEntries((current) => [
+    makeTireHistoryEntry({
+      title: `Installed ${tireSet.brand} ${tireSet.model} ${tireSet.size}`.trim(),
+      action: "install",
+      tireSetId: tireSet.id,
+      tireSetName: tireSet.name,
+      date: todayLocalString(),
+      odometer: currentOdometer,
+    }),
+    ...current,
+  ]);
+
+  setTireSets((current) =>
+    current.map((set) => {
+      if (set.id !== id) {
+        if (set.status === "active") {
+          return {
+            ...set,
+            status: "stored",
+            removedAtOdometer: currentOdometer,
+            storedMiles: getTireSetMiles(set, vehicle),
+          };
         }
 
-        return {
-          ...set,
-          status: "active",
-          installedAtOdometer: currentOdometer,
-          removedAtOdometer: "",
-        };
-      })
-    );
-  }
+        return set;
+      }
+
+      return {
+        ...set,
+        status: "active",
+        installedAtOdometer: currentOdometer,
+        removedAtOdometer: "",
+      };
+    })
+  );
+}
+
+
 
   function retireTireSet(id) {
+    const tireSet = tireSets.find((set) => set.id === id);
+
+    if (!tireSet) return;
+
+    setEntries((current) => [
+      makeTireHistoryEntry({
+        title: `Retired ${tireSet.brand} ${tireSet.model} ${tireSet.size}`.trim(),
+        action: "retire",
+        tireSetId: tireSet.id,
+        tireSetName: tireSet.name,
+        date: todayLocalString(),
+        odometer: currentOdometer,
+      }),
+      ...current,
+    ]);
+
     setTireSets((current) =>
       current.map((set) =>
         set.id === id
@@ -1568,9 +1679,33 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
   function submit(event) {
     event.preventDefault();
 
+    const rotationEntries = pendingRotations
+      .map((id) => tireSets.find((set) => set.id === id))
+      .filter(Boolean)
+      .map((tireSet) =>
+        makeTireHistoryEntry({
+          title: `Rotated ${tireSet.brand} ${tireSet.model} ${tireSet.size}`.trim(),
+          action: "rotation",
+          tireSetId: tireSet.id,
+          tireSetName: tireSet.name,
+          date: todayLocalString(),
+          odometer: currentOdometer,
+        })
+      );
+
+    const updatedTireSets = tireSets.map((set) =>
+      pendingRotations.includes(set.id)
+        ? {
+            ...set,
+            lastRotatedAtOdometer: currentOdometer,
+          }
+        : set
+    );
+
     onSave({
       ...vehicle,
-      tireSets,
+      tireSets: updatedTireSets,
+      entries: [...rotationEntries, ...entries],
     });
   }
 
@@ -1650,6 +1785,40 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
                     updateTireSet(set.id, "model", value)
                   }
                 />
+                <Field
+                  label="Rotation Interval"
+                  type="number"
+                  value={set.rotationIntervalMiles}
+                  onChange={(value) =>
+                    updateTireSet(set.id, "rotationIntervalMiles", Number(value || 0))
+                  }
+                />
+
+                <Field
+                  label="Rotation Soon Warning"
+                  type="number"
+                  value={set.rotationSoonMiles || 500}
+                  onChange={(value) =>
+                    updateTireSet(
+                      set.id,
+                      "rotationSoonMiles",
+                      Number(value || 0)
+                    )
+                  }
+                />
+
+                <Field
+                  label="Initial Tire Miles"
+                  type="number"
+                  value={set.initialMiles || 0}
+                  onChange={(value) =>
+                    updateTireSet(
+                      set.id,
+                      "initialMiles",
+                      Number(value || 0)
+                    )
+                  }
+                />
               </div>
 
               <div className="mt-4 rounded-2xl bg-slate-900 p-3">
@@ -1663,13 +1832,35 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                {set.status !== "active" && (
+                {set.status === "stored" && (
                   <button
                     type="button"
                     onClick={() => installTireSet(set.id)}
                     className="rounded-2xl bg-emerald-500 px-4 py-2 font-bold text-slate-950"
                   >
                     Install
+                  </button>
+                )}
+
+                {set.status === "active" && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPendingRotations((current) =>
+                        current.includes(set.id)
+                          ? current.filter((id) => id !== set.id)
+                          : [...current, set.id]
+                      )
+                    }
+                    className={`rounded-2xl px-4 py-2 font-bold ${
+                      pendingRotations.includes(set.id)
+                        ? "bg-amber-400 text-slate-950"
+                        : "bg-cyan-500 text-slate-950"
+                    }`}
+                  >
+                    {pendingRotations.includes(set.id)
+                      ? "Rotation Pending ✓"
+                      : "Mark Rotated"}
                   </button>
                 )}
 
@@ -1680,6 +1871,18 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
                     className="rounded-2xl bg-amber-500 px-4 py-2 font-bold text-slate-950"
                   >
                     Retire
+                  </button>
+                )}
+
+                {set.status === "retired" && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateTireSet(set.id, "status", "stored")
+                    }
+                    className="rounded-2xl bg-slate-700 px-4 py-2 font-bold text-slate-100"
+                  >
+                    Restore
                   </button>
                 )}
 

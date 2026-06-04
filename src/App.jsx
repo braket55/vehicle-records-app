@@ -2240,19 +2240,20 @@ function StatsScreen({ vehicle }) {
         />
       </ChartCard>
 
-      <MiniLineChart
-        data={vehicleMpgDifferenceSeries}
-        valueLabel="%"
-        headlineValue={avgMpgDifferenceInRange === null ? "—" : `${number(avgMpgDifferenceInRange, 1)}%`}
-        headlineLabel="Average difference"
-        yAxisLabel="% difference"
-        xAxisLabel="Fuel entries"
-        digits={1}
-        symmetricYAxis
-        showZeroLine
-        emptyMessage="Add fuel logs with included vehicle MPG estimates to see this comparison."
-      />
-
+      <ChartCard title="Vehicle MPG Estimate Difference" subtitle="Positive means the vehicle estimate was higher than the calculated MPG.">
+        <MiniLineChart
+          data={vehicleMpgDifferenceSeries}
+          valueLabel="%"
+          headlineValue={avgMpgDifferenceInRange === null ? "—" : `${number(avgMpgDifferenceInRange, 1)}%`}
+          headlineLabel="Average difference"
+          yAxisLabel="% difference"
+          xAxisLabel="Fuel entries"
+          digits={1}
+          symmetricYAxis
+          showZeroLine
+          emptyMessage="Add fuel logs with included vehicle MPG estimates to see this comparison."
+        />
+      </ChartCard>
       <ChartCard title="Monthly Fuel Spending" subtitle="Fuel spending grouped by month in the selected range.">
         <MiniLineChart
           data={monthlyFuelSeries}

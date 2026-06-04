@@ -657,13 +657,39 @@ function parseEntryDate(entry) {
 
 function getRangeStartDate(rangeId) {
   const today = new Date();
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
   if (rangeId === "ALL") return null;
-  if (rangeId === "YTD") return new Date(today.getFullYear(), 0, 1);
-  if (rangeId === "1M") { start.setDate(start.getDate() - 30); return start; }
-  if (rangeId === "3M") { start.setDate(start.getDate() - 90); return start; }
-  if (rangeId === "6M") { start.setDate(start.getDate() - 180); return start; }
-  if (rangeId === "1Y") { start.setDate(start.getDate() - 365); return start; }
+
+  if (rangeId === "YTD") {
+    return new Date(today.getFullYear(), 0, 1);
+  }
+
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate()
+  );
+
+  if (rangeId === "1M") {
+    start.setMonth(start.getMonth() - 1);
+    return start;
+  }
+
+  if (rangeId === "3M") {
+    start.setMonth(start.getMonth() - 3);
+    return start;
+  }
+
+  if (rangeId === "6M") {
+    start.setMonth(start.getMonth() - 6);
+    return start;
+  }
+
+  if (rangeId === "1Y") {
+    start.setFullYear(start.getFullYear() - 1);
+    return start;
+  }
+
   return null;
 }
 
@@ -676,7 +702,7 @@ function getEntriesInRange(vehicle, rangeId) {
 
 function getMilesDrivenInRange(vehicle, rangeId) {
   const odometerEntries = vehicle.entries
-    .filter((entry) => ["fuel", "maintenance"].includes(entry.type) && entry.date && Number(entry.odometer) > 0)
+    .filter((entry) => ["fuel", "maintenance", "tire"].includes(entry.type) && entry.date && Number(entry.odometer) > 0)
     .sort((a, b) => {
       const dateCompare = new Date(a.date) - new Date(b.date);
       if (dateCompare !== 0) return dateCompare;
@@ -760,7 +786,7 @@ function buildMonthlyFuelSeries(vehicle, rangeId) {
 function buildMilesOverTimeSeries(vehicle, rangeId) {
   const startDate = getRangeStartDate(rangeId);
   return vehicle.entries
-    .filter((entry) => ["fuel", "maintenance"].includes(entry.type))
+    .filter((entry) => ["fuel", "maintenance", "tire"].includes(entry.type))
     .filter((entry) => entry.date && Number(entry.odometer) > 0)
     .filter((entry) => !startDate || parseEntryDate(entry) >= startDate)
     .sort((a, b) => {
@@ -2169,6 +2195,22 @@ function TireSetsScreen({ vehicle, onCancel, onSave }) {
   );
 }
 
+function averageSeriesValue(series) {
+  if (!series || series.length === 0) return null;
+
+  const values = series
+    .map((point) => Number(point.value))
+    .filter((value) => !Number.isNaN(value));
+
+  if (values.length === 0) return null;
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function averageMonthlyFuelSpending(monthlyFuelSeries) {
+  return averageSeriesValue(monthlyFuelSeries);
+}
+
 function StatsScreen({ vehicle }) {
   const [range, setRange] = useState("1Y");
   const rangeStats = calculateRangeStats(vehicle, range);
@@ -2176,18 +2218,66 @@ function StatsScreen({ vehicle }) {
   const monthlyFuelSeries = buildMonthlyFuelSeries(vehicle, range);
   const milesSeries = buildMilesOverTimeSeries(vehicle, range);
   const vehicleMpgDifferenceSeries = buildVehicleMpgDifferenceSeries(vehicle, range);
+  const avgMpgInRange = averageSeriesValue(mpgSeries);
+  const avgMpgDifferenceInRange = averageSeriesValue(vehicleMpgDifferenceSeries);
+  const avgMonthlyFuelInRange = averageMonthlyFuelSpending(monthlyFuelSeries);
 
   return (
     <div className="space-y-4">
       <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"><div className="mb-3 flex items-center gap-2"><BarChart3 size={22} className="text-indigo-300" /><div><h2 className="text-xl font-black tracking-tight">Stats & Analytics</h2><p className="text-sm text-slate-400">Dynamic views for {vehicle.nickname}</p></div></div><RangeSelector value={range} onChange={setRange} /></div>
       <div className="grid grid-cols-2 gap-3"><DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} /><DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} /><DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} /><DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} /></div>
       <div className="grid grid-cols-2 gap-3"><StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} /><StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} /></div>
-      <ChartCard title="MPG Over Time" subtitle="Calculated from fuel entries after the first fill-up."><MiniLineChart data={mpgSeries} valueLabel="MPG" yAxisLabel="MPG" xAxisLabel="Fuel entries" digits={1} emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG." /></ChartCard>
-      <ChartCard title="Vehicle MPG Estimate Difference" subtitle="Positive means the vehicle estimate was higher than the calculated MPG.">
-        <MiniLineChart data={vehicleMpgDifferenceSeries} valueLabel="%" yAxisLabel="% difference" xAxisLabel="Fuel entries" digits={1} emptyMessage="Add fuel logs with included vehicle MPG estimates to see this comparison."/>
+      <ChartCard title="MPG Over Time" subtitle="Calculated from fuel entries after the first fill-up.">
+        <MiniLineChart
+          data={mpgSeries}
+          valueLabel="MPG"
+          headlineValue={avgMpgInRange === null ? "—" : `${number(avgMpgInRange, 1)} MPG`}
+          headlineLabel="Average in range"
+          yAxisLabel="MPG"
+          xAxisLabel="Fuel entries"
+          digits={1}
+          emptyMessage="Add at least two fuel logs with increasing odometer readings to see MPG."
+        />
       </ChartCard>
-      <ChartCard title="Monthly Fuel Spending" subtitle="Fuel spending grouped by month in the selected range."><MiniLineChart data={monthlyFuelSeries} valueLabel="Fuel" yAxisLabel="Dollars" xAxisLabel="Month" formatValue={currency} emptyMessage="Add fuel logs to see monthly spending." /></ChartCard>
-      <ChartCard title="Miles Over Time" subtitle="Odometer readings from fuel and maintenance entries."><MiniLineChart data={milesSeries} valueLabel="mi" yAxisLabel="Odometer" xAxisLabel="Date" digits={0} emptyMessage="Add entries with odometer readings to see miles over time." /></ChartCard>
+
+      <MiniLineChart
+        data={vehicleMpgDifferenceSeries}
+        valueLabel="%"
+        headlineValue={avgMpgDifferenceInRange === null ? "—" : `${number(avgMpgDifferenceInRange, 1)}%`}
+        headlineLabel="Average difference"
+        yAxisLabel="% difference"
+        xAxisLabel="Fuel entries"
+        digits={1}
+        symmetricYAxis
+        showZeroLine
+        emptyMessage="Add fuel logs with included vehicle MPG estimates to see this comparison."
+      />
+
+      <ChartCard title="Monthly Fuel Spending" subtitle="Fuel spending grouped by month in the selected range.">
+        <MiniLineChart
+          data={monthlyFuelSeries}
+          valueLabel="Fuel"
+          headlineValue={avgMonthlyFuelInRange === null ? "—" : currency(avgMonthlyFuelInRange)}
+          headlineLabel="Average monthly"
+          yAxisLabel="Dollars"
+          xAxisLabel="Month"
+          formatValue={currency}
+          emptyMessage="Add fuel logs to see monthly spending."
+        />
+      </ChartCard>
+
+      <ChartCard title="Miles Over Time" subtitle="Odometer readings from fuel and maintenance entries.">
+        <MiniLineChart
+          data={milesSeries}
+          valueLabel="mi"
+          headlineValue={`${number(rangeStats.milesDriven)} mi`}
+          headlineLabel="Miles driven in range"
+          yAxisLabel="Odometer"
+          xAxisLabel="Date"
+          digits={0}
+          emptyMessage="Add entries with odometer readings to see miles over time."
+        />
+      </ChartCard>
       <CalculationNotes />
       <CostBreakdownCard fuel={rangeStats.totalFuelCost} maintenance={rangeStats.totalMaintenanceCost} />
     </div>
@@ -2202,14 +2292,29 @@ function RangeSelector({ value, onChange }) {
   return <div className="grid grid-cols-6 gap-1 rounded-2xl bg-slate-950 p-1 ring-1 ring-white/10">{rangeOptions.map((option) => <button key={option.id} type="button" onClick={() => onChange(option.id)} className={`rounded-xl px-2 py-2 text-xs font-bold transition ${value === option.id ? "bg-indigo-500 text-white shadow-lg shadow-indigo-950/30" : "text-slate-400"}`}>{option.label}</button>)}</div>;
 }
 
-function MiniLineChart({ data, valueLabel, yAxisLabel, xAxisLabel, digits = 0, formatValue, emptyMessage }) {
+function MiniLineChart({ data, valueLabel, headlineValue, headlineLabel = "Selected range", yAxisLabel, xAxisLabel, digits = 0, formatValue, emptyMessage, symmetricYAxis = false, showZeroLine = false }) {
   if (!data || data.length === 0) return <div className="flex h-44 items-center justify-center rounded-2xl bg-slate-950 p-4 text-center text-sm text-slate-400 ring-1 ring-white/10">{emptyMessage}</div>;
   const width = 340, height = 190, paddingLeft = 54, paddingRight = 18, paddingTop = 22, paddingBottom = 42;
-  const values = data.map((point) => Number(point.value || 0));
-  const rawMinValue = Math.min(...values), rawMaxValue = Math.max(...values);
-  const valueRange = rawMaxValue - rawMinValue || 1;
-  const minValue = Math.max(0, rawMinValue - valueRange * 0.08);
-  const maxValue = rawMaxValue + valueRange * 0.08;
+  const values = data
+    .map((point) => Number(point.value))
+    .filter((value) => !Number.isNaN(value));
+
+  const rawMinValue = Math.min(...values);
+  const rawMaxValue = Math.max(...values);
+
+  let minValue;
+  let maxValue;
+
+  if (symmetricYAxis) {
+    const maxAbs = Math.max(Math.abs(rawMinValue), Math.abs(rawMaxValue), 10);
+    minValue = -maxAbs;
+    maxValue = maxAbs;
+  } else {
+    const valueRange = rawMaxValue - rawMinValue || 1;
+    minValue = Math.max(0, rawMinValue - valueRange * 0.08);
+    maxValue = rawMaxValue + valueRange * 0.08;
+  }
+
   const adjustedRange = maxValue - minValue || 1;
   const plotWidth = width - paddingLeft - paddingRight;
   const plotHeight = height - paddingTop - paddingBottom;
@@ -2223,17 +2328,30 @@ function MiniLineChart({ data, valueLabel, yAxisLabel, xAxisLabel, digits = 0, f
     return { value: minValue + adjustedRange * (1 - fraction), y: paddingTop + plotHeight * fraction };
   });
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  const latest = data[data.length - 1];
+  const displayValue =
+    headlineValue ??
+    (formatValue ? formatValue(data[data.length - 1].value) : `${number(data[data.length - 1].value, digits)} ${valueLabel}`);
   const firstDate = data[0]?.date || "";
   const lastDate = data[data.length - 1]?.date || "";
-  const displayValue = formatValue ? formatValue(latest.value) : `${number(latest.value, digits)} ${valueLabel}`;
   const formatTick = (value) => (formatValue ? formatValue(value) : number(value, digits));
   return (
     <div className="rounded-2xl bg-slate-950 p-3 ring-1 ring-white/10">
-      <div className="mb-2 flex items-end justify-between gap-3"><div><div className="text-2xl font-black">{displayValue}</div><div className="text-xs text-slate-400">Latest value</div></div><div className="text-right text-xs text-slate-400"><div>High: {formatTick(rawMaxValue)}</div><div>Low: {formatTick(rawMinValue)}</div></div></div>
+      <div className="mb-2 flex items-end justify-between gap-3"><div><div className="text-2xl font-black">{displayValue}</div><div className="text-xs text-slate-400">{headlineLabel}</div></div><div className="text-right text-xs text-slate-400"><div>High: {formatTick(rawMaxValue)}</div><div>Low: {formatTick(rawMinValue)}</div></div></div>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-52 w-full overflow-visible">
         {yTicks.map((tick, index) => <g key={index}><line x1={paddingLeft} y1={tick.y} x2={width - paddingRight} y2={tick.y} stroke="currentColor" className="text-slate-800" strokeWidth="1" /><text x={paddingLeft - 8} y={tick.y + 4} textAnchor="end" className="fill-slate-400 text-[10px]">{formatTick(tick.value)}</text></g>)}
         <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
+        {showZeroLine && minValue < 0 && maxValue > 0 && (
+          <line
+            x1={paddingLeft}
+            y1={paddingTop + plotHeight - ((0 - minValue) / adjustedRange) * plotHeight}
+            x2={width - paddingRight}
+            y2={paddingTop + plotHeight - ((0 - minValue) / adjustedRange) * plotHeight}
+            stroke="currentColor"
+            className="text-slate-600"
+            strokeWidth="1.5"
+            strokeDasharray="4 4"
+          />
+        )}
         <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} stroke="currentColor" className="text-slate-700" strokeWidth="2" />
         <path d={path} fill="none" stroke="currentColor" className="text-cyan-300" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point) => <circle key={point.id || point.date} cx={point.x} cy={point.y} r="4" fill="currentColor" className="text-cyan-200" />)}

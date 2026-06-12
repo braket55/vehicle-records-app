@@ -2225,7 +2225,43 @@ function StatsScreen({ vehicle }) {
   return (
     <div className="space-y-4">
       <div className="rounded-3xl bg-slate-900 p-4 ring-1 ring-white/10"><div className="mb-3 flex items-center gap-2"><BarChart3 size={22} className="text-indigo-300" /><div><h2 className="text-xl font-black tracking-tight">Stats & Analytics</h2><p className="text-sm text-slate-400">Dynamic views for {vehicle.nickname}</p></div></div><RangeSelector value={range} onChange={setRange} /></div>
-      <div className="grid grid-cols-2 gap-3"><DashboardStat icon={<ClipboardList size={18} className="text-slate-100" />} label="Miles driven" value={`${number(rangeStats.milesDriven)} mi`} /><DashboardStat icon={<Fuel size={18} className="text-emerald-400" />} label="Fuel / mile" value={rangeStats.fuelCostPerMile === null ? "—" : currency(rangeStats.fuelCostPerMile)} /><DashboardStat icon={<Wrench size={18} className="text-blue-400" />} label="Maint. / mile" value={rangeStats.maintenanceCostPerMile === null ? "—" : currency(rangeStats.maintenanceCostPerMile)} /><DashboardStat icon={<BarChart3 size={18} className="text-indigo-300" />} label="Total / mile" value={rangeStats.totalCostPerMile === null ? "—" : currency(rangeStats.totalCostPerMile)} /></div>
+      <div className="grid grid-cols-2 gap-3">
+        <DashboardStat
+          icon={<ClipboardList size={18} className="text-slate-100" />}
+          label="Miles driven"
+          value={`${number(rangeStats.milesDriven)} mi`}
+        />
+
+        <DashboardStat
+          icon={<BarChart3 size={18} className="text-indigo-300" />}
+          label="Total / mile"
+          value={
+            rangeStats.totalCostPerMile === null
+              ? "—"
+              : currency(rangeStats.totalCostPerMile)
+          }
+        />
+
+        <DashboardStat
+          icon={<Fuel size={18} className="text-emerald-400" />}
+          label="Fuel / mile"
+          value={
+            rangeStats.fuelCostPerMile === null
+              ? "—"
+              : currency(rangeStats.fuelCostPerMile)
+          }
+        />
+
+        <DashboardStat
+          icon={<Wrench size={18} className="text-blue-400" />}
+          label="Maint. / mile"
+          value={
+            rangeStats.maintenanceCostPerMile === null
+              ? "—"
+              : currency(rangeStats.maintenanceCostPerMile)
+          }
+        />
+      </div>
       <div className="grid grid-cols-2 gap-3"><StatPill label="Fuel spent" value={currency(rangeStats.totalFuelCost)} /><StatPill label="Maintenance spent" value={currency(rangeStats.totalMaintenanceCost)} /></div>
       <ChartCard title="MPG Over Time" subtitle="Calculated from fuel entries after the first fill-up.">
         <MiniLineChart
